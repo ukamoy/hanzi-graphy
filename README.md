@@ -1,73 +1,35 @@
-# React + TypeScript + Vite
+# hanzi-graphy
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+汉字书写练习应用。学生选择课程练习书写汉字，系统记录笔顺正确率和评分。
 
-Currently, two official plugins are available:
+## 功能
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **角色**: 管理员、学生
+- **登录**: 用户名 + 密码
+- **年级预设**: 管理员配置年级汉字库
+- **用户管理**: 管理员增删用户、查看课程数据、改密码
+- **自动生成课程**: 从选定的年级字库随机取 20 字生成课程
+- **自定义课程**: 学生手动输入汉字生成课程
+- **书写练习**: 逐字描红，系统打分
+- **课程列表**: 按创建时间正序排列，自动定位到第一个未完成课程
 
-## React Compiler
+## 初始账号
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+| 角色   | 用户名 | 密码         |
+| ------ | ------ | ------------ |
+| 管理员 | 管理员 | n9RzWpQYNnZw |
 
-## Expanding the ESLint configuration
+首次登录后系统强制要求修改密码，修改后方可继续使用。
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## 开发
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## 构建
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
 ```

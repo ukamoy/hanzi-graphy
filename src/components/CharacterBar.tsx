@@ -1,15 +1,19 @@
+import type { PracticeRecord } from '../engine/storage'
+
 interface Props {
   list: string[]
   active: string
+  records?: Array<PracticeRecord | null>
   onSelect: (char: string) => void
 }
 
 export default function CharacterBar({
   list,
   active,
+  records = [],
   onSelect
 }: Props) {
-  const candidates = list.slice(0, 20)
+  const candidates = list
 
   return (
     <div style={{
@@ -24,6 +28,9 @@ export default function CharacterBar({
     }}>
       {candidates.map((char, index) => {
         const isActive = char === active
+        const record = records[index]
+        const score = record?.score
+        const isCompleted = record?.quiz?.completed
 
         return (
           <button
@@ -41,10 +48,21 @@ export default function CharacterBar({
                 ? '2px solid #1d5d41'
                 : '1px solid #ccc',
               fontWeight: 600,
-              padding: 0
+              padding: 0,
+              display: 'grid',
+              gridTemplateRows: '1fr 16px',
+              placeItems: 'center',
+              lineHeight: 1
             }}
           >
-            {char}
+            <span>{char}</span>
+            <span style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: isActive ? '#eef8ef' : isCompleted ? '#287a55' : '#756d61'
+            }}>
+              {typeof score === 'number' ? `${score}分` : isCompleted ? '完成' : ''}
+            </span>
           </button>
         )
       })}

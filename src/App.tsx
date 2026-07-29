@@ -1,103 +1,896 @@
-import { useState } from 'react'
-import CharacterInput from './components/CharacterInput'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import CharacterBar from './components/CharacterBar'
 import PracticeBoard from './components/PracticeBoard'
-import { getChineseChars } from './engine/chinese'
-import { generateRandomChineseChars } from './engine/randomHanzi'
-import { clearAll } from './engine/storage'
+import {
+  addCustomCourse,
+  addUser,
+  deleteUser,
+  generateDefaultCourses,
+  getPracticeKey,
+  isDefaultAdminPassword,
+  loadAppState,
+  loadCoursesPaginated,
+  loadRecordsForCourses,
+  loginUserByName,
+  logoutUser,
+  saveGradeTexts,
+  type AppState,
+  type Course,
+  type GradeText,
+  type PracticeRecord,
+  updateUserPassword,
+  updateCourse,
+} from './engine/storage'
 
-export default function App() {
-  const [text, setText] = useState('')
-  const [chars, setChars] = useState<string[]>([])
-  const [index, setIndex] = useState(0)
-  const [resetSignal, setResetSignal] = useState(0)
+type CourseStats = {
+  course: Course
+  records: Array<PracticeRecord | null>
+  completedChars: number
+  totalChars: number
+  isCompleted: boolean
+  average: number | null
+  completedAt: number | null
+}
 
-  const active = chars[index] || ''
+const pageSize = 5
+const adminPageSize = 5
 
-  const applyChars = (nextChars: string[]) => {
-    clearAll()
-    setChars(nextChars)
-    setIndex(0)
+const buttonStyle: Record<string, unknown> = {
+  minHeight: 40,
+  padding: '8px 12px',
+  borderRadius: 8,
+  fontSize: 15,
+  fontWeight: 700,
+  cursor: 'pointer'
+}
+
+function tabStyle(active: boolean): Record<string, unknown> {
+  return {
+    ...buttonStyle,
+    minHeight: 36,
+    padding: '6px 14px',
+    fontSize: 14,
+    background: active ? '#287a55' : 'transparent',
+    color: active ? '#fff' : '#5e5548',
+    border: active ? '2px solid #1d5d41' : '2px solid transparent',
+    borderRadius: 8
   }
+}
 
-  const generate = () => {
-    applyChars(getChineseChars(text, 20))
+function formatTime(value: number | null | undefined) {
+  if (!value) return '--'
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit'
+  }).format(new Date(value))
+}
+
+function findRecordForChar(records: Record<string, PracticeRecord>, courseId: string, character: string): PracticeRecord | null {
+  const prefix = `${courseId}:`
+  let fallback: PracticeRecord | null = null
+  for (const key of Object.keys(records)) {
+    if (key.startsWith(prefix) && key.endsWith(`:${character}`)) {
+      const rec = records[key]
+      if (rec?.quiz?.completed) return rec
+      if (!fallback) fallback = rec
+    }
   }
+  return fallback
+}
 
-  const generateRandom = () => {
-    const nextChars = generateRandomChineseChars(20)
-    setText(nextChars.join(''))
-    applyChars(nextChars)
+function getCourseStats(course: Course, records: Record<string, PracticeRecord>): CourseStats {
+  const courseRecords = course.chars.map((character) =>
+    findRecordForChar(records, course.id, character)
+  )
+  const completedChars = courseRecords.filter((r) => r?.quiz?.completed).length
+  const scored = courseRecords.map((r) => r?.score).filter((s): s is number => typeof s === 'number')
+  return {
+    course,
+    records: courseRecords,
+    completedChars,
+    totalChars: course.chars.length,
+    isCompleted: course.chars.length > 0 && completedChars === course.chars.length,
+    average: scored.length > 0 ? Math.round(scored.reduce((a, b) => a + b, 0) / scored.length) : null,
+    completedAt: course.completedAt || null
   }
+}
 
+function summarizeUser(courses: Course[], records: Record<string, PracticeRecord>) {
+  const stats = courses.map((c) => getCourseStats(c, records))
+  const completed = stats.filter((s) => s.isCompleted).length
+  const scored = stats.map((s) => s.average).filter((s): s is number => s !== null)
+  return { courses, stats, completedCourses: completed, average: scored.length > 0 ? Math.round(scored.reduce((a, b) => a + b, 0) / scored.length) : null }
+}
+
+function Pager({ page, total, onPage, size = pageSize }: { page: number; total: number; onPage: (p: number) => void; size?: number }) {
+  const maxPage = Math.max(0, Math.ceil(total / size) - 1)
+  if (maxPage === 0) return null
   return (
-    <div style={{
-      height: '100dvh',
-      display: 'flex',
-      flexDirection: 'column',
-      background: '#f5ecd7'
-    }}>
-      <div style={{
-        minHeight: 64,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '8px 12px',
-        background: '#fff',
-        borderBottom: '1px solid #ddd',
-        flexWrap: 'wrap'
-      }}>
-        <CharacterInput value={text} onChange={setText} />
-
-        <button onClick={generate}>
-          生成
-        </button>
-
-        <button
-          onClick={generateRandom}
-          style={{
-            background: '#2f6f8f'
-          }}
-        >
-          随机20字
-        </button>
-      </div>
-
-      <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
-        <PracticeBoard
-          key={active}
-          character={active}
-          resetKey={resetSignal}
-          onReset={() => setResetSignal((key) => key + 1)}
-        />
-      </div>
-
-      <div style={{
-        // minHeight: 200,
-        height: 'auto',
-        minHeight: chars.length > 0 ? 72 : 0,
-        maxHeight: 'min(36vh, 248px)',
-        flexShrink: 1,
-        background: '#fff',
-        borderTop: '1px solid #ddd',
-        display: 'flex',
-        alignItems: 'flex-start',
-        padding: 8,
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        touchAction: 'pan-y',
-        WebkitOverflowScrolling: 'touch',
-        overscrollBehavior: 'contain'
-      }}>
-        <CharacterBar
-          list={chars}
-          active={active}
-          onSelect={(char: string) => {
-            const nextIndex = chars.indexOf(char)
-            if (nextIndex >= 0) setIndex(nextIndex)
-          }}
-        />
-      </div>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 }}>
+      <button onClick={() => onPage(Math.max(0, page - 1))} disabled={page <= 0}
+        style={{ ...buttonStyle, minHeight: 34, padding: '6px 10px', background: page <= 0 ? '#d7d0c6' : '#6d4c2f', color: '#fff' }}>上一页</button>
+      <span style={{ color: '#756d61', fontSize: 13 }}>{page + 1}/{maxPage + 1}</span>
+      <button onClick={() => onPage(Math.min(maxPage, page + 1))} disabled={page >= maxPage}
+        style={{ ...buttonStyle, minHeight: 34, padding: '6px 10px', background: page >= maxPage ? '#d7d0c6' : '#6d4c2f', color: '#fff' }}>下一页</button>
     </div>
   )
+}
+
+function CourseButton({ stats, selected, onClick, onEdit }: { stats: CourseStats; selected: boolean; onClick: () => void; onEdit?: (c: import('./engine/storage').Course) => void }) {
+  const statusText = stats.isCompleted
+    ? `已完成 ${stats.completedChars}/${stats.totalChars}${stats.average !== null ? `，平均 ${stats.average}` : ''}${stats.completedAt ? `，完成于 ${formatTime(stats.completedAt)}` : ''}`
+    : `完成 ${stats.completedChars}/${stats.totalChars}`
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={onClick} style={{
+        textAlign: 'left', color: selected ? '#fff' : '#241f18',
+        background: selected ? '#287a55' : '#fff',
+        border: selected ? '2px solid #1d5d41' : '1px solid #ddd3c4',
+        borderRadius: 8, padding: 10, cursor: 'pointer', width: '100%'
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <strong style={{ fontSize: 16 }}>课程 {stats.course.number}</strong>
+            {onEdit && (
+              <button onClick={(e) => { e.stopPropagation(); onEdit(stats.course) }}
+                style={{ padding: '2px 8px', fontSize: 12, borderRadius: 6, cursor: 'pointer', background: '#f0f0f0' }}>编辑</button>
+            )}
+          </div>
+          <span style={{ fontSize: 13, color: selected ? '#eef8ef' : '#6a5f50' }}>{statusText}</span>
+        </div>
+        <div style={{ marginTop: 6, color: selected ? '#eef8ef' : '#6a5f50', fontSize: 13 }}>
+          {stats.course.chars.join('')}
+        </div>
+      </button>
+    </div>
+  )
+}
+
+// Simple Modal portal to render modals into document.body and avoid DOM/focus interference
+function Modal({ children, onClose }: { children: React.ReactNode; onClose?: () => void }) {
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  if (!hostRef.current && typeof document !== 'undefined') {
+    hostRef.current = document.createElement('div')
+  }
+
+  useEffect(() => {
+    const host = hostRef.current!
+    if (!host) return
+    document.body.appendChild(host)
+    return () => { if (host.parentNode) host.parentNode.removeChild(host) }
+  }, [])
+
+  // Prevent immediate backdrop click (from the same click that opened the modal) closing it.
+  // allowCloseRef becomes true on the next macrotask.
+  const allowCloseRef = useRef(false)
+  useEffect(() => {
+    const t = setTimeout(() => { allowCloseRef.current = true }, 0)
+    return () => { clearTimeout(t); allowCloseRef.current = false }
+  }, [])
+
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget && onClose && allowCloseRef.current) onClose()
+  }
+
+  const node = (
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.3)', display: 'grid', placeItems: 'center', zIndex: 1000 }}
+      onClick={handleBackdropClick}>
+      {children}
+    </div>
+  )
+
+  return hostRef.current ? createPortal(node, hostRef.current) : null
+}
+
+
+function PwdModal({ userId, draft, setDraft, confirm, setConfirm, onClose, onSubmit }: { userId: string | null; draft: string; setDraft: (v: string) => void; confirm: string; setConfirm: (v: string) => void; onClose: () => void; onSubmit: () => Promise<void> }) {
+  const pwdModalRef = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    if (userId) setTimeout(() => pwdModalRef.current?.focus(), 0)
+  }, [userId])
+  if (!userId) return null
+  const pwdOk = draft.trim().length > 0 && draft === confirm
+  return (
+    <Modal onClose={onClose}>
+      <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 300 }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700 }}>修改密码</h3>
+        <input ref={pwdModalRef} value={draft} onChange={(e) => setDraft(e.target.value)} type="password" placeholder="新密码" autoComplete="new-password"
+          style={{ width: '100%', height: 40, border: '1px solid #bfb5a5', borderRadius: 6, padding: '0 10px', fontSize: 15 }} />
+        <input value={confirm} onChange={(e) => setConfirm(e.target.value)} type="password" placeholder="确认新密码" autoComplete="new-password"
+          onKeyDown={(e) => { if (e.key === 'Enter' && pwdOk) onSubmit() }}
+          style={{ width: '100%', height: 40, border: '1px solid #bfb5a5', borderRadius: 6, padding: '0 10px', fontSize: 15, marginTop: 8 }} />
+        {draft && confirm && draft !== confirm && (
+          <div style={{ marginTop: 6, color: '#b53b35', fontSize: 13 }}>两次输入的密码不一致</div>
+        )}
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <button onClick={onSubmit}
+            disabled={!pwdOk}
+            style={{ ...buttonStyle, flex: 1, background: pwdOk ? '#287a55' : '#d7d0c6', color: '#fff' }}>确认修改</button>
+          <button onClick={onClose}
+            style={{ ...buttonStyle, flex: 1, background: '#d7d0c6', color: '#241f18' }}>取消</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function AddUserModal({ open, name, setName, password, setPassword, onClose, onAdd }: { open: boolean; name: string; setName: (v: string) => void; password: string; setPassword: (v: string) => void; onClose: () => void; onAdd: () => Promise<void> }) {
+  const nameRef = useRef<HTMLInputElement | null>(null)
+  useEffect(() => { if (open) setTimeout(() => nameRef.current?.focus(), 0) }, [open])
+  if (!open) return null
+  const addOk = name.trim().length > 0 && password.trim().length > 0
+  return (
+    <Modal onClose={onClose}>
+      <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 300 }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700 }}>新增学生</h3>
+        <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="学生姓名" autoComplete="off"
+          style={{ width: '100%', height: 40, border: '1px solid #bfb5a5', borderRadius: 6, padding: '0 10px', fontSize: 15 }} />
+        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="初始密码" autoComplete="new-password"
+          onKeyDown={(e) => { if (e.key === 'Enter' && addOk) onAdd() }}
+          style={{ width: '100%', height: 40, border: '1px solid #bfb5a5', borderRadius: 6, padding: '0 10px', fontSize: 15, marginTop: 8 }} />
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <button onClick={onAdd}
+            disabled={!addOk}
+            style={{ ...buttonStyle, flex: 1, background: addOk ? '#287a55' : '#d7d0c6', color: '#fff' }}>添加</button>
+          <button onClick={onClose}
+            style={{ ...buttonStyle, flex: 1, background: '#d7d0c6', color: '#241f18' }}>取消</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function DeleteConfirm({ userId, name, onDelete, onClose }: { userId: string | null; name: string; onDelete: () => Promise<void>; onClose: () => void }) {
+  if (!userId) return null
+  const doDelete = async () => { await onDelete() }
+  return (
+    <Modal onClose={onClose}>
+      <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 300 }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700 }}>确认删除</h3>
+        <p style={{ margin: '0 0 14px', color: '#5e5548', fontSize: 15 }}>确认删除用户 {name}，此操作不可恢复。</p>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={doDelete}
+            style={{ ...buttonStyle, flex: 1, background: '#b53b35', color: '#fff' }}>确认删除</button>
+          <button onClick={onClose}
+            style={{ ...buttonStyle, flex: 1, background: '#d7d0c6', color: '#241f18' }}>取消</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function EditCourseModal({ open, course, text, setText, onClose, onSave }: { open: boolean; course: Course | null; text: string; setText: (v: string) => void; onClose: () => void; onSave: () => Promise<void> }) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  useEffect(() => { if (open) setTimeout(() => textareaRef.current?.focus(), 0) }, [open])
+  if (!open || !course) return null
+  return (
+    <Modal onClose={onClose}>
+      <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 420 }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700 }}>编辑课程 {course.number}</h3>
+        <textarea ref={textareaRef} value={text} onChange={(e) => setText(e.target.value)} rows={6}
+          placeholder="输入汉字（会覆盖原课程）" style={{ width: '100%', border: '1px solid #bfb5a5', borderRadius: 6, padding: '8px 10px', fontSize: 15 }} />
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <button onClick={onSave} style={{ ...buttonStyle, flex: 1, background: '#287a55', color: '#fff' }}>保存</button>
+          <button onClick={onClose} style={{ ...buttonStyle, flex: 1, background: '#d7d0c6', color: '#241f18' }}>取消</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+export default function App() {
+  const [appState, setAppState] = useState<AppState | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loginUserId, setLoginUserId] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loginError, setLoginError] = useState('')
+  const [selectedCourseId, setSelectedCourseId] = useState('')
+  const [index, setIndex] = useState(0)
+  const [resetSignal, setResetSignal] = useState(0)
+  const [customCourseText, setCustomCourseText] = useState('')
+  const [coursePage, setCoursePage] = useState(0)
+
+  const [adminTab, setAdminTab] = useState<'chars' | 'users'>('users')
+  const [viewedUserId, setViewedUserId] = useState('')
+  const [adminCoursePage, setAdminCoursePage] = useState(0)
+  const [gradeTexts, setGradeTexts] = useState<GradeText[]>([])
+  const [selectedGradeId, setSelectedGradeId] = useState('')
+
+  const [pwdModalUserId, setPwdModalUserId] = useState<string | null>(null)
+  const [pwdDraft, setPwdDraft] = useState('')
+  const [pwdConfirm, setPwdConfirm] = useState('')
+  const [forcePwd, setForcePwd] = useState('')
+  const [forcePwdConfirm, setForcePwdConfirm] = useState('')
+  const [addUserOpen, setAddUserOpen] = useState(false)
+  const [addUserName, setAddUserName] = useState('')
+  const [addUserPassword, setAddUserPassword] = useState('')
+  const [selectedStudentGradeId, setSelectedStudentGradeId] = useState('')
+  const [studentGenTab, setStudentGenTab] = useState<'auto' | 'custom'>('auto')
+  const [deleteConfirmUserId, setDeleteConfirmUserId] = useState<string | null>(null)
+  const [deleteConfirmName, setDeleteConfirmName] = useState('')
+  const [checkingDefault, setCheckingDefault] = useState(true)
+  const [isDefaultPwd, setIsDefaultPwd] = useState(false)
+
+  // Admin add-course modal state
+  const [adminAddCourseOpen, setAdminAddCourseOpen] = useState(false)
+  const [adminAddCourseMode, setAdminAddCourseMode] = useState<'auto' | 'custom'>('auto')
+  const [adminAddCourseText, setAdminAddCourseText] = useState('')
+  const [adminSelectedGradeId, setAdminSelectedGradeId] = useState('')
+
+
+  // Student data
+  const [userCourses, setUserCourses] = useState<Course[]>([])
+  const [courseRecords, setCourseRecords] = useState<Record<string, PracticeRecord>>({})
+  const [totalCourses, setTotalCourses] = useState(0)
+
+  // Admin viewed user data
+  const [viewedUserCourses, setViewedUserCourses] = useState<Course[]>([])
+  const [viewedUserRecords, setViewedUserRecords] = useState<Record<string, PracticeRecord>>({})
+  const [totalAdminCourses, setTotalAdminCourses] = useState(0)
+
+  // Edit course modal state
+  const [editCourseOpen, setEditCourseOpen] = useState(false)
+  const [editingCourse, setEditingCourse] = useState<Course | null>(null)
+  const [editCourseText, setEditCourseText] = useState('')
+
+  const refreshAppState = useCallback(async () => {
+    const state = await loadAppState()
+    setAppState(state)
+    setGradeTexts(state.gradeTexts || [])
+
+    if (state.loggedInUserId) {
+      const { courses, total } = await loadCoursesPaginated(state.loggedInUserId, 1, pageSize)
+      setUserCourses(courses)
+      setTotalCourses(total)
+      setCoursePage(0)
+      if (courses.length > 0) {
+        const recs = await loadRecordsForCourses(state.loggedInUserId, courses.map((c) => c.id))
+        setCourseRecords(recs)
+      } else {
+        setCourseRecords({})
+      }
+    }
+  }, [])
+
+  const loadStudentPage = useCallback(async (page: number) => {
+    if (!appState?.loggedInUserId) return
+    const { courses, total } = await loadCoursesPaginated(appState.loggedInUserId, page + 1, pageSize)
+    setUserCourses(courses)
+    setTotalCourses(total)
+    if (courses.length > 0) {
+      const recs = await loadRecordsForCourses(appState.loggedInUserId, courses.map((c) => c.id))
+      setCourseRecords(recs)
+    } else {
+      setCourseRecords({})
+    }
+  }, [appState?.loggedInUserId])
+
+  const loadAdminPage = useCallback(async (page: number, userId: string) => {
+    const { courses, total } = await loadCoursesPaginated(userId, page + 1, adminPageSize)
+    setViewedUserCourses(courses)
+    setTotalAdminCourses(total)
+    if (courses.length > 0) {
+      const recs = await loadRecordsForCourses(userId, courses.map((c) => c.id))
+      setViewedUserRecords(recs)
+    } else {
+      setViewedUserRecords({})
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshAppState().then(() => setLoading(false))
+  }, [refreshAppState])
+
+  const loggedInUser = appState?.users.find((u) => u.id === appState?.loggedInUserId) || null
+  const studentUsers = useMemo(() => appState?.users.filter((u) => u.role === 'student') || [], [appState?.users])
+
+  const resetPracticeSelection = () => {
+    setSelectedCourseId('')
+    setIndex(0)
+    setResetSignal((k) => k + 1)
+  }
+
+  const handleLogout = async () => {
+    await logoutUser()
+    resetPracticeSelection()
+    await refreshAppState()
+  }
+
+  const doAddUser = () => {
+    setAddUserOpen(true); setAddUserName(''); setAddUserPassword('')
+  }
+
+  useEffect(() => {
+    if (loggedInUser?.role === 'admin') {
+      isDefaultAdminPassword().then((r) => { setIsDefaultPwd(r); setCheckingDefault(false) })
+    } else {
+      setCheckingDefault(false)
+    }
+  }, [loggedInUser?.role, loggedInUser?.id])
+
+  // Load data for admin viewed user (only when viewedUserId changes)
+  const prevViewedUserIdRef = useRef<string>('')
+  useEffect(() => {
+    if (loggedInUser?.role !== 'admin') return
+    const targetId = viewedUserId || studentUsers[0]?.id || ''
+    if (!targetId) return
+    if (targetId === prevViewedUserIdRef.current) return
+    prevViewedUserIdRef.current = targetId
+    setAdminCoursePage(0)
+    loadAdminPage(0, targetId)
+  })
+
+  if (loading) return <div style={{ height: '100dvh', display: 'grid', placeItems: 'center', background: '#f4efe4', color: '#756d61', fontSize: 18 }}>加载中...</div>
+
+
+
+
+  if (!loggedInUser) {
+    return (
+      <div style={{ height: '100dvh', display: 'grid', placeItems: 'center', background: '#f4efe4', color: '#241f18', padding: 16 }}>
+        <section style={{ width: 'min(420px, 100%)', background: '#fff', border: '1px solid #d8d0c3', borderRadius: 8, padding: 18 }}>
+          <h1 style={{ margin: '0 0 14px', fontSize: 24, lineHeight: 1.2, color: '#241f18', fontWeight: 800, letterSpacing: 0 }}>登录</h1>
+          <input value={loginUserId} onChange={(e) => { setLoginUserId(e.target.value); setLoginError('') }}
+            placeholder="用户名" type="text" autoFocus
+            onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('login-btn')?.click() }}
+            style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', background: '#fff', color: '#241f18', fontSize: 16 }} />
+          <input value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError('') }}
+            type="password" placeholder="密码"
+            onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('login-btn')?.click() }}
+            style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', fontSize: 16, marginTop: 10 }} />
+          {loginError && <div style={{ marginTop: 8, color: '#b53b35', fontSize: 14 }}>{loginError}</div>}
+          <button id="login-btn" onClick={async () => {
+            const ok = await loginUserByName(loginUserId, loginPassword)
+            if (!ok) { setLoginError('用户名或密码不正确'); return }
+            setLoginPassword(''); setLoginError(''); resetPracticeSelection(); await refreshAppState()
+          }} style={{ ...buttonStyle, width: '100%', marginTop: 12, background: '#287a55', color: '#fff' }}>登录</button>
+        </section>
+      </div>
+    )
+  }
+
+  if (loggedInUser.role === 'admin' && !checkingDefault && isDefaultPwd) {
+    const forcePwdOk = forcePwd.trim().length > 0 && forcePwd === forcePwdConfirm
+    const doForceChange = async () => {
+      if (!forcePwdOk) return
+      await updateUserPassword('admin', forcePwd)
+      setForcePwd(''); setForcePwdConfirm('')
+      setIsDefaultPwd(false)
+      await refreshAppState()
+    }
+    return (
+      <div style={{ height: '100dvh', display: 'grid', placeItems: 'center', background: '#f4efe4', color: '#241f18', padding: 16 }}>
+        <section style={{ width: 'min(420px, 100%)', background: '#fff', border: '1px solid #d8d0c3', borderRadius: 8, padding: 18 }}>
+          <h2 style={{ margin: '0 0 8px', fontSize: 22, fontWeight: 800, color: '#241f18' }}>请修改默认密码</h2>
+          <p style={{ margin: '0 0 14px', color: '#756d61', fontSize: 15, lineHeight: 1.4 }}>
+            首次登录或使用默认密码，需要先修改密码才能继续使用
+          </p>
+          <input value={forcePwd} onChange={(e) => setForcePwd(e.target.value)} type="password" placeholder="新密码" autoFocus autoComplete="new-password"
+            style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', fontSize: 16 }} />
+          <input value={forcePwdConfirm} onChange={(e) => setForcePwdConfirm(e.target.value)} type="password" placeholder="确认新密码" autoComplete="new-password"
+            onKeyDown={(e) => { if (e.key === 'Enter' && forcePwdOk) doForceChange() }}
+            style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', borderRadius: 6, padding: '0 10px', fontSize: 16, marginTop: 8 }} />
+          {forcePwd && forcePwdConfirm && forcePwd !== forcePwdConfirm && (
+            <div style={{ marginTop: 6, color: '#b53b35', fontSize: 14 }}>两次输入的密码不一致</div>
+          )}
+          <button onClick={doForceChange}
+            disabled={!forcePwdOk}
+            style={{ ...buttonStyle, width: '100%', marginTop: 12, background: forcePwdOk ? '#287a55' : '#d7d0c6', color: '#fff' }}>确认修改</button>
+        </section>
+      </div>
+    )
+  }
+
+  if (loggedInUser.role === 'admin') {
+    const viewedUser = studentUsers.find((u) => u.id === viewedUserId) || studentUsers[0] || null
+    const viewedSummary = viewedUser ? summarizeUser(viewedUserCourses, viewedUserRecords) : null
+    const allStats = viewedSummary?.stats ?? []
+    const visibleStats = allStats
+    const selectedGradeItem = gradeTexts.find((g) => g.id === selectedGradeId) || gradeTexts[0]
+
+    return (
+      <div style={{ height: '100dvh', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#f4efe4', color: '#241f18', overflow: 'hidden' }}>
+        <header style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', background: '#fff', borderBottom: '1px solid #d8d0c3', flexWrap: 'wrap' }}>
+          <strong style={{ fontSize: 20, marginRight: 8 }}>管理员</strong>
+          <button onClick={() => setAdminTab('users')} style={tabStyle(adminTab === 'users')}>用户管理</button>
+          <button onClick={() => setAdminTab('chars')} style={tabStyle(adminTab === 'chars')}>字库管理</button>
+          <button onClick={() => setPwdModalUserId('admin')}
+            style={{ ...buttonStyle, minHeight: 34, padding: '6px 12px', marginLeft: 'auto', background: '#7a6a5a', color: '#fff' }}>改密码</button>
+          <button onClick={handleLogout}
+            style={{ ...buttonStyle, minHeight: 34, padding: '6px 12px', background: '#6d4c2f', color: '#fff' }}>退出登录</button>
+        </header>
+        <main style={{ minHeight: 0, overflowY: 'auto', padding: 16 }}>
+          {adminTab === 'chars' ? (
+            <section style={{ background: '#fff', border: '1px solid #d8d0c3', borderRadius: 8, padding: 14 }}>
+              <h2 style={{ margin: '0 0 12px', fontSize: 18, color: '#241f18', fontWeight: 800 }}>年级汉字预设</h2>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                {gradeTexts.map((g) => (
+                  <button key={g.id} onClick={() => setSelectedGradeId(g.id)}
+                    style={{ ...buttonStyle, minHeight: 34, padding: '6px 14px', borderRadius: 8,
+                      background: g.id === selectedGradeItem?.id ? '#287a55' : '#fff',
+                      color: g.id === selectedGradeItem?.id ? '#fff' : '#241f18',
+                      border: g.id === selectedGradeItem?.id ? '2px solid #1d5d41' : '1px solid #ddd3c4' }}>
+                    {g.name}
+                  </button>
+                ))}
+                <button onClick={() => { const id = 'grade-' + Date.now(); setGradeTexts([...gradeTexts, { id, name: '新班级', chars: '' }]); setSelectedGradeId(id) }}
+                  style={{ ...buttonStyle, minHeight: 34, padding: '6px 14px', background: '#2f6f8f', color: '#fff', borderRadius: 8 }}>+ 新增年级</button>
+              </div>
+              {selectedGradeItem && (
+                <div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                    <input value={selectedGradeItem.name} onChange={(e) => setGradeTexts(gradeTexts.map((g) => g.id === selectedGradeItem.id ? { ...g, name: e.target.value } : g))}
+                      placeholder="年级名称" style={{ width: 160, height: 38, border: '1px solid #bfb5a5', borderRadius: 6, padding: '0 10px', fontSize: 15 }} />
+                    {gradeTexts.length > 1 && (
+                      <button onClick={() => { const next = gradeTexts.filter((g) => g.id !== selectedGradeItem.id); setGradeTexts(next); setSelectedGradeId(next[0]?.id || '') }}
+                        style={{ ...buttonStyle, minHeight: 34, padding: '4px 10px', fontSize: 13, background: '#b53b35', color: '#fff' }}>删除</button>
+                    )}
+                  </div>
+                  <textarea value={selectedGradeItem.chars} onChange={(e) => setGradeTexts(gradeTexts.map((g) => g.id === selectedGradeItem.id ? { ...g, chars: e.target.value } : g))}
+                    rows={5} placeholder="输入汉字"
+                    style={{ width: '100%', resize: 'vertical', border: '1px solid #bfb5a5', borderRadius: 8, padding: 10, fontSize: 18, lineHeight: 1.4, background: '#fff', color: '#241f18' }} />
+                  <button onClick={async () => { await saveGradeTexts(gradeTexts); setGradeTexts(gradeTexts); await refreshAppState() }}
+                    style={{ ...buttonStyle, marginTop: 8, background: '#2f6f8f', color: '#fff' }}>保存预设</button>
+                </div>
+              )}
+            </section>
+          ) : (
+            <div style={{ minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 16, height: '100%' }}>
+              <aside style={{ minHeight: 0, overflowY: 'auto', background: '#fffaf1', border: '1px solid #d8d0c3', borderRadius: 8, padding: 12 }}>
+                <section style={{ marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <h2 style={{ margin: 0, fontSize: 17, lineHeight: 1.2, color: '#241f18', fontWeight: 800 }}>用户列表</h2>
+                  <button onClick={doAddUser}
+                    style={{ ...buttonStyle, minHeight: 34, padding: '6px 12px', fontSize: 13, background: '#287a55', color: '#fff' }}>新增用户</button>
+                </section>
+                <section>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {studentUsers.map((u) => {
+                      const selected = u.id === viewedUser?.id
+                      return (
+                        <div key={u.id} style={{ padding: 10, background: selected ? '#e7f3ea' : '#fff', border: selected ? '2px solid #287a55' : '1px solid #ddd3c4', borderRadius: 8 }}>
+                          <button onClick={() => { setViewedUserId(u.id); setAdminCoursePage(0) }}
+                            style={{ textAlign: 'left', display: 'block', width: '100%', padding: 0, background: 'transparent', color: '#241f18', borderRadius: 0 }}>
+                            <strong>{u.name}</strong>
+                          </button>
+                          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                            <button onClick={() => setPwdModalUserId(u.id)}
+                              style={{ ...buttonStyle, minHeight: 30, padding: '4px 8px', fontSize: 13, background: '#2f6f8f', color: '#fff', flex: 1 }}>改密码</button>
+                            <button onClick={() => { setDeleteConfirmUserId(u.id); setDeleteConfirmName(u.name) }}
+                              style={{ ...buttonStyle, minHeight: 30, padding: '4px 8px', fontSize: 13, background: '#b53b35', color: '#fff' }}>删除</button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {studentUsers.length === 0 && <div style={{ color: '#756d61', fontSize: 14 }}>还没有学生用户</div>}
+                  </div>
+                </section>
+              </aside>
+              <section style={{ minHeight: 0, overflowY: 'auto', background: '#fff', border: '1px solid #d8d0c3', borderRadius: 8, padding: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <h2 style={{ margin: '0 0 10px', fontSize: 18, color: '#241f18', fontWeight: 800 }}>用户数据</h2>
+                  <div>
+                    <button onClick={() => { setAdminAddCourseOpen(true); setAdminAddCourseMode('auto'); setAdminSelectedGradeId(selectedGradeId || gradeTexts[0]?.id || '') }}
+                      style={{ ...buttonStyle, minHeight: 34, padding: '6px 12px', background: '#2f6f8f', color: '#fff' }}>新增课程</button>
+                  </div>
+                </div>
+                {viewedUser && viewedSummary ? (
+                  <>
+                    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 12, color: '#5e5548', fontSize: 14 }}>
+                      <strong style={{ color: '#241f18' }}>{viewedUser.name}</strong>
+                      <span>课程 {viewedSummary.courses.length}</span>
+                      <span>完成 {viewedSummary.completedCourses}</span>
+                      <span>平均 {viewedSummary.average ?? '--'}分</span>
+                    </div>
+                    {allStats.length > 0 ? (
+                      <>
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          {visibleStats.map((item) => (
+                            <div key={item.course.id} style={{ border: '1px solid #e5dacb', borderRadius: 8, padding: 10, background: '#fffaf1' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <strong>课程 {item.course.number}</strong>
+                                  <button onClick={() => { setEditingCourse(item.course); setEditCourseText(item.course.chars.join('')); setEditCourseOpen(true) }} style={{ padding: '4px 8px', fontSize: 12 }}>编辑</button>
+                                </div>
+                                <span style={{ fontSize: 12, color: item.isCompleted ? '#287a55' : '#b53b35' }}>{item.isCompleted ? '已完成' : '进行中'}</span>
+                              </div>
+                              <div style={{ marginTop: 4, color: '#6a5f50', fontSize: 13 }}>{item.course.chars.join('')}</div>
+                              <div style={{ marginTop: 4, color: '#6a5f50', fontSize: 13 }}>
+                                完成 {item.completedChars}/{item.totalChars}
+                                {item.average !== null ? `，平均${item.average}分` : ''}
+                                {item.completedAt ? `，完成于 ${formatTime(item.completedAt)}` : `，创建于 ${formatTime(item.course.createdAt)}`}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <Pager page={adminCoursePage} total={totalAdminCourses} onPage={(p) => { setAdminCoursePage(p); loadAdminPage(p, viewedUserId || studentUsers[0]?.id || '') }} size={adminPageSize} />
+                      </>
+                    ) : (
+                      <div style={{ color: '#756d61', fontSize: 14 }}>该用户还没有课程数据</div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ color: '#756d61', fontSize: 14 }}>请选择一个学生用户</div>
+                )}
+              </section>
+            </div>
+          )}
+        </main>
+        <PwdModal userId={pwdModalUserId} draft={pwdDraft} setDraft={setPwdDraft} confirm={pwdConfirm} setConfirm={setPwdConfirm}
+          onClose={() => { setPwdModalUserId(null); setPwdDraft(''); setPwdConfirm('') }}
+          onSubmit={async () => {
+            if (!pwdModalUserId) return
+            if (pwdDraft.trim().length === 0 || pwdDraft !== pwdConfirm) return
+            await updateUserPassword(pwdModalUserId, pwdDraft)
+            setPwdModalUserId(null); setPwdDraft(''); setPwdConfirm('')
+            await refreshAppState()
+          }} />
+
+        <AddUserModal open={addUserOpen} name={addUserName} setName={setAddUserName} password={addUserPassword} setPassword={setAddUserPassword}
+          onClose={() => { setAddUserOpen(false); setAddUserName(''); setAddUserPassword('') }}
+          onAdd={async () => {
+            const addOk = addUserName.trim().length > 0 && addUserPassword.trim().length > 0
+            if (!addOk) return
+            await addUser(addUserName.trim(), addUserPassword.trim())
+            setAddUserOpen(false); setAddUserName(''); setAddUserPassword('')
+            await refreshAppState()
+          }} />
+
+        <EditCourseModal open={editCourseOpen} course={editingCourse} text={editCourseText} setText={setEditCourseText}
+          onClose={() => { setEditCourseOpen(false); setEditingCourse(null); setEditCourseText('') }}
+          onSave={async () => {
+            if (!editingCourse) return
+            const chars = editCourseText.split('').filter((c) => c.trim().length > 0)
+            const updated = await updateCourse(editingCourse.id, chars)
+            if (updated) {
+              setCoursePage(0)
+              await loadStudentPage(0)
+              if (viewedUserId) {
+                setAdminCoursePage(0)
+                await loadAdminPage(0, viewedUserId)
+              }
+              setEditCourseOpen(false); setEditingCourse(null); setEditCourseText('')
+            } else {
+              alert('更新课程失败')
+            }
+          }} />
+
+        <DeleteConfirm userId={deleteConfirmUserId} name={deleteConfirmName}
+          onDelete={async () => {
+            const next = studentUsers.find((x) => x.id !== deleteConfirmUserId)
+            if (!deleteConfirmUserId) return
+            await deleteUser(deleteConfirmUserId)
+            setDeleteConfirmUserId(null); setDeleteConfirmName('')
+            setViewedUserId(next?.id || '')
+            await refreshAppState()
+          }} onClose={() => { setDeleteConfirmUserId(null); setDeleteConfirmName('') }} />
+
+      {adminAddCourseOpen && (
+        <Modal onClose={() => setAdminAddCourseOpen(false)}>
+          <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700 }}>为 {viewedUser?.name || '学生'} 新增课程</h3>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+              <button onClick={() => setAdminAddCourseMode('auto')} style={tabStyle(adminAddCourseMode === 'auto')}>自动生成</button>
+              <button onClick={() => setAdminAddCourseMode('custom')} style={tabStyle(adminAddCourseMode === 'custom')}>自定义</button>
+            </div>
+            {adminAddCourseMode === 'auto' ? (
+              <>
+                <select value={adminSelectedGradeId} onChange={(e) => setAdminSelectedGradeId(e.target.value)}
+                  style={{ width: '100%', height: 40, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', background: '#fff', color: '#241f18', fontSize: 14, marginBottom: 8 }}>
+                  {gradeTexts.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={async () => {
+                    if (!viewedUser) return
+                    const grade = gradeTexts.find((g) => g.id === adminSelectedGradeId) || gradeTexts[0]
+                    const courses = await generateDefaultCourses(viewedUser.id, grade?.chars)
+                    if (courses[0]) {
+                      const lastPage = Math.max(0, Math.ceil((totalAdminCourses + courses.length) / adminPageSize) - 1)
+                      setAdminCoursePage(lastPage)
+                      await loadAdminPage(lastPage, viewedUser.id)
+                    }
+                    setAdminAddCourseOpen(false); setAdminAddCourseText('')
+                  }} style={{ ...buttonStyle, flex: 1, background: '#287a55', color: '#fff' }}>生成课程</button>
+                  <button onClick={() => { setAdminAddCourseOpen(false); setAdminAddCourseText('') }} style={{ ...buttonStyle, flex: 1, background: '#d7d0c6', color: '#241f18' }}>取消</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <textarea value={adminAddCourseText} onChange={(e) => setAdminAddCourseText(e.target.value)} rows={4}
+                  placeholder="输入要练习的汉字" style={{ width: '100%', border: '1px solid #bfb5a5', borderRadius: 8, padding: 10, fontSize: 15, marginBottom: 8 }} />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={async () => {
+                    if (!viewedUser) return
+                    const course = await addCustomCourse(viewedUser.id, adminAddCourseText)
+                    if (course) {
+                      const lastPage = Math.max(0, Math.ceil((totalAdminCourses + 1) / adminPageSize) - 1)
+                      setAdminCoursePage(lastPage)
+                      await loadAdminPage(lastPage, viewedUser.id)
+                    }
+                    setAdminAddCourseOpen(false); setAdminAddCourseText('')
+                  }} style={{ ...buttonStyle, flex: 1, background: '#287a55', color: '#fff' }}>添加课程</button>
+                  <button onClick={() => { setAdminAddCourseOpen(false); setAdminAddCourseText('') }} style={{ ...buttonStyle, flex: 1, background: '#d7d0c6', color: '#241f18' }}>取消</button>
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
+      </div>
+    )
+  }
+
+  const courseStats = userCourses.map((c) => getCourseStats(c, courseRecords))
+  const sortedCourses = courseStats
+  const visibleCourses = sortedCourses
+
+  const activeCourse = userCourses.find((c) => c.id === selectedCourseId)
+    || courseStats.find((s) => !s.isCompleted)?.course
+    || courseStats[0]?.course
+    || null
+  const activeStats = activeCourse ? getCourseStats(activeCourse, courseRecords) : null
+  const safeIndex = activeCourse ? Math.min(index, Math.max(0, activeCourse.chars.length - 1)) : 0
+  const active = activeCourse?.chars[safeIndex] || ''
+  const activePracticeKey = activeCourse && active ? getPracticeKey(activeCourse.id, safeIndex, active) : ''
+
+  return (
+    <div style={{ height: '100dvh', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#f4efe4', color: '#241f18', overflow: 'hidden' }}>
+      <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: '#fff', borderBottom: '1px solid #d8d0c3', flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 20 }}>{loggedInUser.name}</strong>
+        <span style={{ color: '#756d61', fontSize: 14 }}>
+          {activeCourse ? `课程 ${activeCourse.number}` : '还没有课程'}
+          {activeStats?.average !== null && activeStats?.average !== undefined ? ` · ${activeStats.average}分` : ''}
+        </span>
+        <button onClick={() => setPwdModalUserId(loggedInUser.id)}
+          style={{ ...buttonStyle, marginLeft: 'auto', background: '#7a6a5a', color: '#fff' }}>改密码</button>
+        <button onClick={handleLogout}
+          style={{ ...buttonStyle, background: '#6d4c2f', color: '#fff' }}>退出登录</button>
+      </header>
+
+      <main style={{ minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', overflow: 'hidden' }}>
+        <aside style={{ minHeight: 0, overflowY: 'auto', borderRight: '1px solid #d8d0c3', background: '#fffaf1', padding: 12 }}>
+          <section style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+              <button onClick={() => setStudentGenTab('auto')} style={tabStyle(studentGenTab === 'auto')}>自动生成</button>
+              <button onClick={() => setStudentGenTab('custom')} style={tabStyle(studentGenTab === 'custom')}>自定义</button>
+            </div>
+            {studentGenTab === 'auto' ? (
+              <>
+                <select value={selectedStudentGradeId} onChange={(e) => setSelectedStudentGradeId(e.target.value)}
+                  style={{ width: '100%', height: 40, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', background: '#fff', color: '#241f18', fontSize: 14, marginBottom: 8 }}>
+                  {gradeTexts.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+                <button onClick={async () => {
+                  const grade = gradeTexts.find((g) => g.id === selectedStudentGradeId) || gradeTexts[0]
+                  const courses = await generateDefaultCourses(loggedInUser.id, grade?.chars)
+                  if (courses[0]) {
+                    setSelectedCourseId(courses[0].id); setIndex(0)
+                    const lastPage = Math.max(0, Math.ceil((totalCourses + courses.length) / pageSize) - 1)
+                    setCoursePage(lastPage)
+                    await loadStudentPage(lastPage)
+                  }
+                }} style={{ ...buttonStyle, width: '100%', background: '#2f6f8f', color: '#fff' }}>新增课程</button>
+              </>
+            ) : (
+              <>
+                <div style={{ position: 'relative' }}>
+                  <textarea value={customCourseText} onChange={(e) => setCustomCourseText(e.target.value)}
+                    placeholder="输入要练习的汉字" rows={3}
+                    style={{ width: '100%', resize: 'vertical', border: '1px solid #bfb5a5', borderRadius: 8, padding: '10px 30px 28px 10px', fontSize: 18, lineHeight: 1.4, background: '#fff', color: '#241f18', boxSizing: 'border-box' }} />
+                  <div style={{ position: 'absolute', right: 8, bottom: 6, fontSize: 12, color: '#756d61', pointerEvents: 'none' }}>{customCourseText.length} 字</div>
+                </div>
+                <button onClick={async () => {
+                  const course = await addCustomCourse(loggedInUser.id, customCourseText)
+                  if (!course) return
+                  setSelectedCourseId(course.id); setCustomCourseText(''); setIndex(0)
+                  const lastPage = Math.max(0, Math.ceil((totalCourses + 1) / pageSize) - 1)
+                  setCoursePage(lastPage)
+                  await loadStudentPage(lastPage)
+                }} style={{ ...buttonStyle, width: '100%', marginTop: 8, background: '#2f6f8f', color: '#fff' }}>新增课程</button>
+              </>
+            )}
+          </section>
+
+          <section style={{ borderTop: '1px solid #e5dacb', paddingTop: 12 }}>
+            {totalCourses === 0 ? (
+              <div style={{ color: '#756d61', fontSize: 14, textAlign: 'center', padding: 20 }}>
+                点击上方的"新增课程"开始练习
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 8 }}>
+                {visibleCourses.map((item) => (
+                  <CourseButton key={item.course.id} stats={item}
+                    selected={item.course.id === activeCourse?.id}
+                    onClick={() => { setSelectedCourseId(item.course.id); setIndex(0) }}
+                    onEdit={(c) => { setEditingCourse(c); setEditCourseText(c.chars.join('')); setEditCourseOpen(true) }} />
+                ))}
+              </div>
+            )}
+            <Pager page={coursePage} total={totalCourses} onPage={(p) => { setCoursePage(p); loadStudentPage(p) }} />
+          </section>
+        </aside>
+
+        <section style={{ minWidth: 0, minHeight: 0, display: 'grid', gridTemplateRows: '1fr auto', overflow: 'hidden' }}>
+          <div style={{ minHeight: 0, position: 'relative', background: '#f5ecd7' }}>
+            {activeCourse && active && activeStats ? (
+              <PracticeBoard
+                key={`${loggedInUser.id}:${activePracticeKey}`}
+                character={active} userId={loggedInUser.id} courseId={activeCourse.id}
+                practiceKey={activePracticeKey} resetKey={resetSignal}
+                initialRecord={courseRecords[activePracticeKey]}
+                onReset={() => setResetSignal((k) => k + 1)}
+                onSaved={async () => {
+                  // Reload records for current page courses
+                  if (loggedInUser.id) {
+                    const recs = await loadRecordsForCourses(loggedInUser.id, userCourses.map((c) => c.id))
+                    setCourseRecords(recs)
+                  }
+                }}
+              />
+            ) : (
+              <div style={{ height: '100%', display: 'grid', placeItems: 'center', color: '#756d61', fontSize: 18 }}>
+                点击左侧"新增课程"开始练习
+              </div>
+            )}
+          </div>
+          <div style={{ minHeight: activeCourse ? 86 : 0, maxHeight: 'min(36vh, 260px)', background: '#fff', borderTop: '1px solid #ddd', display: 'flex', alignItems: 'flex-start', padding: 8, overflowY: 'auto', overflowX: 'hidden', touchAction: 'pan-y', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain' }}>
+            {activeCourse && activeStats && (
+              <CharacterBar list={activeCourse.chars} active={active} records={activeStats.records}
+                onSelect={(char: string) => { const ni = activeCourse.chars.indexOf(char); if (ni >= 0) setIndex(ni) }} />
+            )}
+          </div>
+        </section>
+      </main>
+      <PwdModal userId={pwdModalUserId} draft={pwdDraft} setDraft={setPwdDraft} confirm={pwdConfirm} setConfirm={setPwdConfirm}
+        onClose={() => { setPwdModalUserId(null); setPwdDraft(''); setPwdConfirm('') }}
+        onSubmit={async () => {
+          if (!pwdModalUserId) return
+          if (pwdDraft.trim().length === 0 || pwdDraft !== pwdConfirm) return
+          await updateUserPassword(pwdModalUserId, pwdDraft)
+          setPwdModalUserId(null); setPwdDraft(''); setPwdConfirm('')
+          await refreshAppState()
+        }} />
+
+      <AddUserModal open={addUserOpen} name={addUserName} setName={setAddUserName} password={addUserPassword} setPassword={setAddUserPassword}
+        onClose={() => { setAddUserOpen(false); setAddUserName(''); setAddUserPassword('') }}
+        onAdd={async () => {
+          const addOk = addUserName.trim().length > 0 && addUserPassword.trim().length > 0
+          if (!addOk) return
+          await addUser(addUserName.trim(), addUserPassword.trim())
+          setAddUserOpen(false); setAddUserName(''); setAddUserPassword('')
+          await refreshAppState()
+        }} />
+
+      <EditCourseModal open={editCourseOpen} course={editingCourse} text={editCourseText} setText={setEditCourseText}
+        onClose={() => { setEditCourseOpen(false); setEditingCourse(null); setEditCourseText('') }}
+        onSave={async () => {
+          if (!editingCourse) return
+          const chars = editCourseText.split('').filter((c) => c.trim().length > 0)
+          const updated = await updateCourse(editingCourse.id, chars)
+          if (updated) {
+            setCoursePage(0)
+            await loadStudentPage(0)
+            if (viewedUserId) {
+              setAdminCoursePage(0)
+              await loadAdminPage(0, viewedUserId)
+            }
+            setEditCourseOpen(false); setEditingCourse(null); setEditCourseText('')
+          } else {
+            alert('更新课程失败')
+          }
+        }} />
+
+      <DeleteConfirm userId={deleteConfirmUserId} name={deleteConfirmName}
+        onDelete={async () => {
+          const next = studentUsers.find((x) => x.id !== deleteConfirmUserId)
+          if (!deleteConfirmUserId) return
+          await deleteUser(deleteConfirmUserId)
+          setDeleteConfirmUserId(null); setDeleteConfirmName('')
+          setViewedUserId(next?.id || '')
+          await refreshAppState()
+        }} onClose={() => { setDeleteConfirmUserId(null); setDeleteConfirmName('') }} />
+
+    </div>
+  )
+
 }

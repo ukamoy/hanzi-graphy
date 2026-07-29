@@ -9,7 +9,7 @@ export default function HanziCharacter({
   character
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const writerRef = useRef<any>(null)
+  const writerRef = useRef<HanziWriter | null>(null)
 
   useEffect(() => {
     const el = containerRef.current
@@ -41,11 +41,8 @@ export default function HanziCharacter({
 
     return () => {
       // 不直接操作 innerHTML
-      const node = containerRef.current
-      if (node) {
-        while (node.firstChild) {
-          node.removeChild(node.firstChild)
-        }
+      while (el.firstChild) {
+        el.removeChild(el.firstChild)
       }
 
       writerRef.current = null

@@ -1,28 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import HanziWriter from 'hanzi-writer'
 import type { Point, StrokeData } from 'hanzi-writer'
 import GridLayer from './GridLayer'
 import { getPinyinText } from '../engine/pinyin'
-import { load, save } from '../engine/storage'
+import {
+  savePracticeRecord,
+  type PracticeRecord,
+  type QuizRecord
+} from '../engine/storage'
 import { loadHanziCharacterData } from '../hanzi/loadHanziCharacterData'
 
 interface Props {
   character: string
+  userId: string
+  courseId: string
+  practiceKey: string
+  readOnly?: boolean
   resetKey?: number
+  initialRecord?: PracticeRecord | null
   onReset?: () => void
+  onSaved?: () => void
 }
 
-type QuizStats = {
-  totalStrokes: number
-  correctStrokes: number
-  totalMistakes: number
-  qualityPenalty: number
-  currentStroke: number
-  mistakesOnStroke: number
-  strokesRemaining: number
-  completed: boolean
-  lastResult: 'correct' | 'mistake' | null
-}
+type QuizStats = QuizRecord
 
 type HanziCharacterData = {
   strokes: Array<{
@@ -132,45 +132,70 @@ function calculateStrokeQualityPenalty(
 
 export default function PracticeBoard({
   character,
+  userId,
+  courseId,
+  practiceKey,
+  readOnly = false,
   resetKey,
-  onReset
+  initialRecord = null,
+  onReset,
+  onSaved
 }: Props) {
+  const prevKeyRef = useRef(practiceKey)
+  const [loadedRecord, setLoadedRecord] = useState<PracticeRecord | null>(initialRecord)
+  if (practiceKey !== prevKeyRef.current) {
+    prevKeyRef.current = practiceKey
+    setLoadedRecord(initialRecord)
+  }
+  const record = loadedRecord
+  const initialPaths = record?.paths || []
+  const initialStats = normalizeStats(record?.quiz)
+  const initialScore = record?.score ?? null
   const writerHostRef = useRef<HTMLDivElement>(null)
-  const writerRef = useRef<any>(null)
+  const writerRef = useRef<HanziWriter | null>(null)
   const replayIntroRef = useRef<(startStroke?: number, showCompleted?: boolean) => void>(() => {})
   const mounted = useRef(false)
-  const quizMistakeOffsetRef = useRef(0)
+  const quizMistakeOffsetRef = useRef(initialStats.totalMistakes)
   const characterDataRef = useRef<HanziCharacterData | null>(null)
   // const [brushSize, setBrushSize] = useState(8)
   const brushSize = 8
-  const [paths, setPaths] = useState<string[]>([])
-  const pathsRef = useRef<string[]>([])
-  const [score, setScore] = useState<number | null>(null)
-  const [stats, setStats] = useState<QuizStats>(emptyStats)
-  const statsRef = useRef<QuizStats>(emptyStats)
+  const [paths, setPaths] = useState<string[]>(() => initialPaths)
+  const pathsRef = useRef<string[]>(initialPaths)
+  const [score, setScore] = useState<number | null>(() => initialScore)
+  const [stats, setStats] = useState<QuizStats>(() => initialStats)
+  const statsRef = useRef<QuizStats>(initialStats)
   const [isIntroPlaying, setIsIntroPlaying] = useState(false)
+  const onSavedRef = useRef(onSaved)
+  onSavedRef.current = onSaved
 
   const pinyinText = useMemo(() => getPinyinText(character), [character])
   const hasStartedWriting = paths.length > 0 || score !== null || stats.totalMistakes > 0
 
-  const commitPracticeState = (
+  const commitPracticeState = useCallback((
     nextPaths: string[],
     nextStats: QuizStats,
-    nextScore: number | null
+    nextScore: number | null,
+    save = true
   ) => {
     pathsRef.current = nextPaths
     statsRef.current = nextStats
     setPaths(nextPaths)
     setStats(nextStats)
     setScore(nextScore)
-    save(character, {
-      paths: nextPaths,
-      score: nextScore ?? undefined,
-      quiz: nextStats
-    })
-  }
+    if (save) {
+      savePracticeRecord(userId, practiceKey, {
+        character,
+        courseId,
+        paths: nextPaths,
+        score: nextScore ?? undefined,
+        quiz: nextStats,
+        updatedAt: Date.now()
+      })
+      onSavedRef.current?.()
+    }
+  }, [character, courseId, practiceKey, userId])
 
-  const recordStroke = (strokeData: StrokeData, isCorrect: boolean) => {
+  const recordStroke = useCallback((strokeData: StrokeData, isCorrect: boolean) => {
     const drawnPath = strokeData.drawnPath?.pathString
     const nextPaths = drawnPath ? [...pathsRef.current, drawnPath] : pathsRef.current
     const nextQualityPenalty = statsRef.current.qualityPenalty + (
@@ -189,27 +214,11 @@ export default function PracticeBoard({
     )
     const nextScore = calculateScore(nextStats)
 
-    commitPracticeState(nextPaths, nextStats, nextScore)
-  }
+    commitPracticeState(nextPaths, nextStats, nextScore, false)
+  }, [commitPracticeState])
 
   useEffect(() => {
-    const history = load(character)
-    const loadedPaths = history?.paths || []
-    const loadedStats = normalizeStats(history?.quiz)
-
-    setPaths(loadedPaths)
-    pathsRef.current = loadedPaths
-    setScore(history?.score ?? null)
-    setStats(loadedStats)
-    statsRef.current = loadedStats
-    setIsIntroPlaying(false)
-    quizMistakeOffsetRef.current = loadedStats.totalMistakes
-    characterDataRef.current = null
-    mounted.current = false
-  }, [character])
-
-  useEffect(() => {
-    if (resetKey !== undefined && resetKey > 0 && mounted.current) {
+    if (!readOnly && resetKey !== undefined && resetKey > 0 && mounted.current) {
       const nextStats = {
         ...emptyStats,
         totalStrokes: statsRef.current.totalStrokes
@@ -221,7 +230,7 @@ export default function PracticeBoard({
     }
 
     mounted.current = true
-  }, [resetKey, character])
+  }, [resetKey, character, commitPracticeState, readOnly])
 
   useEffect(() => {
     const host = writerHostRef.current
@@ -320,7 +329,7 @@ export default function PracticeBoard({
 
             setIsIntroPlaying(false)
 
-            if (showCompleted) {
+            if (showCompleted || readOnly) {
               writer.showCharacter()
               return
             }
@@ -331,7 +340,7 @@ export default function PracticeBoard({
       }
 
       replayIntroRef.current = replayIntro
-      replayIntro(startStroke, hasCompleted)
+      replayIntro(startStroke, hasCompleted || readOnly)
     })
 
     return () => {
@@ -345,7 +354,7 @@ export default function PracticeBoard({
         host.removeChild(host.firstChild)
       }
     }
-  }, [character])
+  }, [character, commitPracticeState, recordStroke, readOnly])
 
   // useEffect(() => {
   //   const writer = writerRef.current
@@ -492,19 +501,21 @@ export default function PracticeBoard({
               }}>
                 {score !== null ? `${score}分` : '--分'}
               </div>
-              <button
-                onClick={onReset}
-                style={{
-                  background: '#c33',
-                  color: '#fff',
-                  padding: '6px 10px',
-                  borderRadius: 6,
-                  fontSize: 14,
-                  lineHeight: 1
-                }}
-              >
-                重写
-              </button>
+              {!readOnly && (
+                <button
+                  onClick={onReset}
+                  style={{
+                    background: '#c33',
+                    color: '#fff',
+                    padding: '6px 10px',
+                    borderRadius: 6,
+                    fontSize: 14,
+                    lineHeight: 1
+                  }}
+                >
+                  重写
+                </button>
+              )}
             </div>
             {stats.totalStrokes > 0 && (
               <div>
