@@ -34,6 +34,7 @@ function init() {
       number INTEGER NOT NULL,
       chars TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'default',
+      library_name TEXT,
       created_at INTEGER NOT NULL,
       completed_at INTEGER,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -74,9 +75,18 @@ function init() {
     );
   `)
 
+  migrate()
+
   const row = db.prepare('SELECT COUNT(*) as count FROM users WHERE id = ?').get('admin') as { count: number }
   if (row.count === 0) {
     seed()
+  }
+}
+
+function migrate() {
+  const cols = db.prepare(`PRAGMA table_info(courses)`).all() as { name: string }[]
+  if (!cols.some((c) => c.name === 'library_name')) {
+    db.exec(`ALTER TABLE courses ADD COLUMN library_name TEXT`)
   }
 }
 

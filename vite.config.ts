@@ -10,7 +10,6 @@ export default defineConfig({
           if (id.includes('node_modules')) {
             if (id.includes('react') || id.includes('react-dom')) return 'vendor'
             if (id.includes('hanzi-writer')) return 'hanzi-writer'
-            if (id.includes('pinyin-pro')) return 'pinyin-pro'
             return 'vendor'
           }
         },

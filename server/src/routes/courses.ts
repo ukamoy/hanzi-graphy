@@ -70,6 +70,7 @@ router.get('/:userId', requireAuth, (req, res) => {
         number: c.number,
         chars: JSON.parse(c.chars),
         source: c.source,
+        libraryName: c.library_name,
         createdAt: c.created_at,
         completedAt: c.completed_at
       })),
@@ -83,6 +84,7 @@ router.get('/:userId', requireAuth, (req, res) => {
         number: c.number,
         chars: JSON.parse(c.chars),
         source: c.source,
+        libraryName: c.library_name,
         createdAt: c.created_at,
         completedAt: c.completed_at
       }))
@@ -91,7 +93,7 @@ router.get('/:userId', requireAuth, (req, res) => {
 })
 
 router.post('/:userId/generate', requireAuth, (req, res) => {
-  const { text } = req.body
+  const { text, libraryName } = req.body
   const db = getDb()
 
   let pool: string
@@ -122,8 +124,8 @@ router.post('/:userId/generate', requireAuth, (req, res) => {
   const number = (maxNum.max || 0) + 1
   const id = createId('course')
 
-  db.prepare(`INSERT INTO courses (id, user_id, number, chars, source, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(id, req.params.userId, number, JSON.stringify(selected), 'default', Date.now())
+  db.prepare(`INSERT INTO courses (id, user_id, number, chars, source, library_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, req.params.userId, number, JSON.stringify(selected), 'default', libraryName || null, Date.now())
 
   const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(id) as any
   res.json({
@@ -132,6 +134,7 @@ router.post('/:userId/generate', requireAuth, (req, res) => {
       number: course.number,
       chars: JSON.parse(course.chars),
       source: course.source,
+      libraryName: course.library_name,
       createdAt: course.created_at,
       completedAt: course.completed_at
     }]
@@ -157,8 +160,8 @@ router.post('/:userId/custom', requireAuth, (req, res) => {
   const number = (maxNum.max || 0) + 1
   const id = createId('course')
 
-  db.prepare(`INSERT INTO courses (id, user_id, number, chars, source, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(id, req.params.userId, number, JSON.stringify(chars), 'custom', Date.now())
+  db.prepare(`INSERT INTO courses (id, user_id, number, chars, source, library_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, req.params.userId, number, JSON.stringify(chars), 'custom', '自定义', Date.now())
 
   const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(id) as any
   res.json({
@@ -167,6 +170,7 @@ router.post('/:userId/custom', requireAuth, (req, res) => {
       number: course.number,
       chars: JSON.parse(course.chars),
       source: course.source,
+      libraryName: course.library_name,
       createdAt: course.created_at,
       completedAt: course.completed_at
     }
@@ -194,6 +198,7 @@ router.put('/:courseId', requireAuth, (req, res) => {
       number: updated.number,
       chars: JSON.parse(updated.chars),
       source: updated.source,
+      libraryName: updated.library_name,
       createdAt: updated.created_at,
       completedAt: updated.completed_at
     }

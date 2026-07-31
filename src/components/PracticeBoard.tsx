@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import HanziWriter from 'hanzi-writer'
 import type { Point, StrokeData } from 'hanzi-writer'
 import GridLayer from './GridLayer'
-import { getPinyinText } from '../engine/pinyin'
+import { getPinyinText, getWordHints, type WordHint } from '../engine/pinyin'
 import {
   savePracticeRecord,
   type PracticeRecord,
@@ -41,6 +41,8 @@ const emptyStats: QuizStats = {
   completed: false,
   lastResult: null
 }
+
+const PINYIN_SPACE = 26
 
 function clampScore(score: number) {
   return Math.max(0, Math.min(100, score))
@@ -152,6 +154,24 @@ export default function PracticeBoard({
   const initialStats = normalizeStats(record?.quiz)
   const initialScore = record?.score ?? null
   const writerHostRef = useRef<HTMLDivElement>(null)
+  const boardWrapRef = useRef<HTMLDivElement>(null)
+  const [boardScale, setBoardScale] = useState(1)
+
+  useEffect(() => {
+    const el = boardWrapRef.current
+    if (!el) return
+    const update = () => {
+      const rect = el.getBoundingClientRect()
+      if (rect.width <= 0) return
+      // boardWrap 内还包含字格上方一行的拼音，按剩余空间缩放 300x300 字格
+      setBoardScale(Math.min(1, rect.width / 300, (rect.height - PINYIN_SPACE) / 300))
+    }
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   const writerRef = useRef<HanziWriter | null>(null)
   const replayIntroRef = useRef<(startStroke?: number, showCompleted?: boolean) => void>(() => {})
   const mounted = useRef(false)
@@ -169,8 +189,8 @@ export default function PracticeBoard({
   onSavedRef.current = onSaved
 
   const pinyinText = useMemo(() => getPinyinText(character), [character])
+  const [wordHints, setWordHints] = useState<WordHint[]>([])
   const hasStartedWriting = paths.length > 0 || score !== null || stats.totalMistakes > 0
-
   const commitPracticeState = useCallback((
     nextPaths: string[],
     nextStats: QuizStats,
@@ -190,8 +210,9 @@ export default function PracticeBoard({
         score: nextScore ?? undefined,
         quiz: nextStats,
         updatedAt: Date.now()
+      }).then(() => {
+        onSavedRef.current?.()
       })
-      onSavedRef.current?.()
     }
   }, [character, courseId, practiceKey, userId])
 
@@ -231,6 +252,19 @@ export default function PracticeBoard({
 
     mounted.current = true
   }, [resetKey, character, commitPracticeState, readOnly])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!character) return
+    getWordHints(character)
+      .then((hints) => {
+        if (!cancelled) setWordHints(hints)
+      })
+      .catch(() => {
+        if (!cancelled) setWordHints([])
+      })
+    return () => { cancelled = true }
+  }, [character])
 
   useEffect(() => {
     const host = writerHostRef.current
@@ -374,89 +408,140 @@ export default function PracticeBoard({
       height: '100%',
       display: 'flex',
       flexDirection: 'column',
-      justifyContent: 'center',
-      alignItems: 'center'
+      alignItems: 'center',
+      overflow: 'hidden'
     }}>
-      {character && (
-        <div style={{
-          height: 42,
-          marginBottom: 6,
-          textAlign: 'center',
-          color: '#2d2a25'
-        }}>
-          {/* <div style={{
-            fontSize: 26,
-            fontWeight: 700,
-            lineHeight: 1
-          }}>
-            {character}
-          </div> */}
+      <div ref={boardWrapRef} style={{
+        flex: 1,
+        minHeight: 0,
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}>
+        {character && (
           <div style={{
-            marginTop: 3,
+            flexShrink: 0,
+            width: 300 * boardScale,
+            textAlign: 'center',
             fontSize: 18,
             fontWeight: 'bold',
-            color: '#756d61'
+            color: '#756d61',
+            lineHeight: 1.2,
+            paddingBottom: 2,
+            pointerEvents: 'none'
           }}>
             {pinyinText}
           </div>
+        )}
+
+        <div style={{
+          width: 300 * boardScale,
+          height: 300 * boardScale
+        }}>
+          <div style={{
+            width: 300,
+            height: 300,
+            position: 'relative',
+            transform: `scale(${boardScale})`,
+            transformOrigin: 'top left'
+          }}>
+            <GridLayer />
+
+            <div
+              ref={writerHostRef}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                touchAction: 'none',
+                zIndex: 2
+              }}
+            />
+
+            <svg
+              width={300}
+              height={300}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                pointerEvents: 'none',
+                zIndex: 3
+              }}
+            >
+              {!isIntroPlaying && paths.map((path, index) => {
+                if (isFilledBrushPath(path)) {
+                  return <path key={index} d={path} fill="#111" opacity={0.88} />
+                }
+
+                return (
+                  <path
+                    key={index}
+                    d={path}
+                    fill="none"
+                    stroke="#111"
+                    strokeWidth={brushSize}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity={0.88}
+                  />
+                )
+              })}
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      {character && wordHints.length > 0 && (
+        <div style={{
+          flexShrink: 0,
+          width: '100%',
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          gap: '2px 12px',
+          fontSize: 13,
+          color: '#6a5f50',
+          padding: '6px 8px 0'
+        }}>
+          {wordHints.map((hint) => {
+            const syllables = hint.pinyin.split(' ')
+
+            return (
+              <span key={hint.word} style={{ whiteSpace: 'nowrap' }}>
+                <span style={{ display: 'inline-flex', gap: 3, verticalAlign: 'bottom' }}>
+                  {Array.from(hint.word).map((ch, idx) => (
+                    <span
+                      key={idx}
+                      style={{
+                        display: 'inline-flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        lineHeight: 1.2
+                      }}
+                    >
+                      <span style={{ fontSize: 11, color: '#756d61' }}>
+                        {syllables[idx] || '\u00a0'}
+                      </span>
+                      <span style={{ color: '#2f6f8f', fontWeight: 600 }}>{ch}</span>
+                    </span>
+                  ))}
+                </span>
+                <span style={{ color: '#8a7f6d' }}> {hint.meaning}</span>
+              </span>
+            )
+          })}
         </div>
       )}
 
       <div style={{
-        width: 300,
-        height: 300,
-        position: 'relative'
-      }}>
-        <GridLayer />
-
-        <div
-          ref={writerHostRef}
-          style={{
-            position: 'absolute',
-            inset: 0,
-            touchAction: 'none',
-            zIndex: 2
-          }}
-        />
-
-        <svg
-          width={300}
-          height={300}
-          style={{
-            position: 'absolute',
-            inset: 0,
-            pointerEvents: 'none',
-            zIndex: 3
-          }}
-        >
-          {!isIntroPlaying && paths.map((path, index) => {
-            if (isFilledBrushPath(path)) {
-              return <path key={index} d={path} fill="#111" opacity={0.88} />
-            }
-
-            return (
-              <path
-                key={index}
-                d={path}
-                fill="none"
-                stroke="#111"
-                strokeWidth={brushSize}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                opacity={0.88}
-              />
-            )
-          })}
-        </svg>
-      </div>
-
-      <div style={{
-        minHeight: 112,
+        minHeight: 88,
         marginTop: 8,
         textAlign: 'center',
         color: '#333',
         fontSize: 14,
-        lineHeight: 1.5
+        lineHeight: 1.5,
+        flexShrink: 0
       }}>
         {/* <label style={{
           display: 'inline-flex',

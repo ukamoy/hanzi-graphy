@@ -65,8 +65,8 @@ export const api = {
     }
     return request<{ courses: any[] }>('GET', `/courses/${userId}`)
   },
-  generateCourse(userId: string, text?: string) {
-    return request<{ courses: any[] }>('POST', `/courses/${userId}/generate`, { text })
+  generateCourse(userId: string, text?: string, libraryName?: string) {
+    return request<{ courses: any[] }>('POST', `/courses/${userId}/generate`, { text, libraryName })
   },
   addCustomCourse(userId: string, text: string) {
     return request<{ course: any }>('POST', `/courses/${userId}/custom`, { text })

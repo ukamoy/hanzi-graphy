@@ -4,14 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/generate-cedict.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/generate-cedict.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
     "hanzi-writer": "^3.7.3",
-    "pinyin-pro": "^3.28.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },
@@ -21,6 +22,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "cedict": "^1.45.0",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
@@ -28,5 +30,18 @@
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",
     "vite": "^8.0.12"
-  }
+  },
+  "description": "汉字书写练习应用。学生选择课程练习书写汉字，系统记录笔顺正确率和评分。",
+  "main": "eslint.config.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ukamoy/hanzi-graphy.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ukamoy/hanzi-graphy/issues"
+  },
+  "homepage": "https://github.com/ukamoy/hanzi-graphy#readme"
 }

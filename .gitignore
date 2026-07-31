@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Generated from CC-CEDICT (scripts/generate-cedict.mjs)
+src/data/cedict-pinyin.ts
+public/data/cedict-words.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

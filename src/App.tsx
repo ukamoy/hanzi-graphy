@@ -10,7 +10,9 @@ import {
   getPracticeKey,
   isDefaultAdminPassword,
   loadAppState,
+  loadCourses,
   loadCoursesPaginated,
+  loadRecords,
   loadRecordsForCourses,
   loginUserByName,
   logoutUser,
@@ -45,6 +47,17 @@ const buttonStyle: Record<string, unknown> = {
   cursor: 'pointer'
 }
 
+const editButtonStyle: Record<string, unknown> = {
+  padding: '4px 8px',
+  fontSize: 12,
+  borderRadius: 6,
+  cursor: 'pointer',
+  background: '#f0f0f0',
+  color: '#241f18',
+  border: '1px solid #d8d0c3',
+  whiteSpace: 'nowrap'
+}
+
 function tabStyle(active: boolean): Record<string, unknown> {
   return {
     ...buttonStyle,
@@ -66,6 +79,49 @@ function formatTime(value: number | null | undefined) {
   }).format(new Date(value))
 }
 
+// 手机端竖屏时提示横屏使用
+function RotatePrompt() {
+  const [show, setShow] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const isTouch = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || navigator.maxTouchPoints > 0
+    const isTablet = Math.min(window.innerWidth, window.innerHeight) >= 768
+    if (!isTouch || isTablet) return
+    const mq = window.matchMedia('(orientation: portrait)')
+    const update = () => setShow(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+
+  if (!show) return null
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 9999,
+      background: '#f4efe4', display: 'grid', placeItems: 'center',
+      padding: 24, color: '#241f18', textAlign: 'center'
+    }}>
+      <div>
+        <div style={{
+          width: 64, height: 34, border: '3px solid #287a55', borderRadius: 6,
+          transform: 'rotate(90deg)', margin: '0 auto 28px', position: 'relative', boxSizing: 'border-box'
+        }}>
+          <div style={{ position: 'absolute', right: -20, top: '50%', transform: 'translateY(-50%)', width: 22, height: 2, background: '#287a55' }} />
+          <div style={{ position: 'absolute', left: -20, top: '50%', transform: 'translateY(-50%)', width: 22, height: 2, background: '#287a55' }} />
+        </div>
+        <div style={{ fontSize: 20, fontWeight: 800 }}>请横屏使用</div>
+        <div style={{ marginTop: 8, color: '#756d61', fontSize: 15 }}>请将手机旋转至横向方向，以获得最佳书写体验</div>
+      </div>
+    </div>
+  )
+}
+
+function getUniqueChineseChars(value: string) {
+  return Array.from(new Set(Array.from(value).filter((ch) => ch >= '\u4e00' && ch <= '\u9fff')))
+}
+
 function findRecordForChar(records: Record<string, PracticeRecord>, courseId: string, character: string): PracticeRecord | null {
   const prefix = `${courseId}:`
   let fallback: PracticeRecord | null = null
@@ -80,8 +136,8 @@ function findRecordForChar(records: Record<string, PracticeRecord>, courseId: st
 }
 
 function getCourseStats(course: Course, records: Record<string, PracticeRecord>): CourseStats {
-  const courseRecords = course.chars.map((character) =>
-    findRecordForChar(records, course.id, character)
+  const courseRecords = course.chars.map((character, index) =>
+    records[getPracticeKey(course.id, index, character)] ?? findRecordForChar(records, course.id, character)
   )
   const completedChars = courseRecords.filter((r) => r?.quiz?.completed).length
   const scored = courseRecords.map((r) => r?.score).filter((s): s is number => typeof s === 'number')
@@ -129,12 +185,19 @@ function CourseButton({ stats, selected, onClick, onEdit }: { stats: CourseStats
         border: selected ? '2px solid #1d5d41' : '1px solid #ddd3c4',
         borderRadius: 8, padding: 10, cursor: 'pointer', width: '100%'
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <strong style={{ fontSize: 16 }}>课程 {stats.course.number}</strong>
-            {onEdit && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 1 }}>
+            <strong style={{ fontSize: 16, whiteSpace: 'nowrap' }}>课程 {stats.course.number}</strong>
+            {(stats.course.libraryName || stats.course.source === 'custom') && (
+              <span style={{
+                fontSize: 11, color: selected ? '#eef8ef' : '#756d61',
+                background: selected ? 'rgba(255,255,255,0.18)' : '#f0e9dc',
+                borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap'
+              }}>{stats.course.libraryName || '自定义'}</span>
+            )}
+            {onEdit && !stats.isCompleted && (
               <button onClick={(e) => { e.stopPropagation(); onEdit(stats.course) }}
-                style={{ padding: '2px 8px', fontSize: 12, borderRadius: 6, cursor: 'pointer', background: '#f0f0f0' }}>编辑</button>
+                style={editButtonStyle}>编辑</button>
             )}
           </div>
           <span style={{ fontSize: 13, color: selected ? '#eef8ef' : '#6a5f50' }}>{statusText}</span>
@@ -323,16 +386,32 @@ export default function App() {
   const [userCourses, setUserCourses] = useState<Course[]>([])
   const [courseRecords, setCourseRecords] = useState<Record<string, PracticeRecord>>({})
   const [totalCourses, setTotalCourses] = useState(0)
+  const [completedCharSet, setCompletedCharSet] = useState<Set<string>>(new Set())
 
   // Admin viewed user data
   const [viewedUserCourses, setViewedUserCourses] = useState<Course[]>([])
   const [viewedUserRecords, setViewedUserRecords] = useState<Record<string, PracticeRecord>>({})
+  const [viewedUserAllCourses, setViewedUserAllCourses] = useState<Course[]>([])
+  const [viewedUserAllRecords, setViewedUserAllRecords] = useState<Record<string, PracticeRecord>>({})
   const [totalAdminCourses, setTotalAdminCourses] = useState(0)
 
   // Edit course modal state
   const [editCourseOpen, setEditCourseOpen] = useState(false)
   const [editingCourse, setEditingCourse] = useState<Course | null>(null)
   const [editCourseText, setEditCourseText] = useState('')
+
+  const refreshCompletedChars = useCallback(async (userId: string) => {
+    try {
+      const recs = await loadRecords(userId)
+      const set = new Set<string>()
+      for (const rec of Object.values(recs)) {
+        if (rec?.quiz?.completed) set.add(rec.character)
+      }
+      setCompletedCharSet(set)
+    } catch {
+      // ignore
+    }
+  }, [])
 
   const refreshAppState = useCallback(async () => {
     const state = await loadAppState()
@@ -350,8 +429,9 @@ export default function App() {
       } else {
         setCourseRecords({})
       }
+      await refreshCompletedChars(state.loggedInUserId)
     }
-  }, [])
+  }, [refreshCompletedChars])
 
   const loadStudentPage = useCallback(async (page: number) => {
     if (!appState?.loggedInUserId) return
@@ -375,6 +455,18 @@ export default function App() {
       setViewedUserRecords(recs)
     } else {
       setViewedUserRecords({})
+    }
+  }, [])
+
+  // Load ALL courses + records for a viewed user, used for accurate summary stats (不受分页影响)
+  const loadAdminSummary = useCallback(async (userId: string) => {
+    const allCourses = await loadCourses(userId)
+    setViewedUserAllCourses(allCourses)
+    if (allCourses.length > 0) {
+      const recs = await loadRecordsForCourses(userId, allCourses.map((c) => c.id))
+      setViewedUserAllRecords(recs)
+    } else {
+      setViewedUserAllRecords({})
     }
   }, [])
 
@@ -419,6 +511,7 @@ export default function App() {
     prevViewedUserIdRef.current = targetId
     setAdminCoursePage(0)
     loadAdminPage(0, targetId)
+    loadAdminSummary(targetId)
   })
 
   if (loading) return <div style={{ height: '100dvh', display: 'grid', placeItems: 'center', background: '#f4efe4', color: '#756d61', fontSize: 18 }}>加载中...</div>
@@ -484,13 +577,19 @@ export default function App() {
 
   if (loggedInUser.role === 'admin') {
     const viewedUser = studentUsers.find((u) => u.id === viewedUserId) || studentUsers[0] || null
-    const viewedSummary = viewedUser ? summarizeUser(viewedUserCourses, viewedUserRecords) : null
-    const allStats = viewedSummary?.stats ?? []
+    const viewedSummary = viewedUser ? summarizeUser(viewedUserAllCourses, viewedUserAllRecords) : null
+    const listSummary = summarizeUser(viewedUserCourses, viewedUserRecords)
+    const allStats = listSummary.stats ?? []
     const visibleStats = allStats
     const selectedGradeItem = gradeTexts.find((g) => g.id === selectedGradeId) || gradeTexts[0]
+    const viewedCompletedChars = new Set<string>()
+    for (const rec of Object.values(viewedUserAllRecords)) {
+      if (rec?.quiz?.completed) viewedCompletedChars.add(rec.character)
+    }
 
     return (
       <div style={{ height: '100dvh', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#f4efe4', color: '#241f18', overflow: 'hidden' }}>
+        <RotatePrompt />
         <header style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', background: '#fff', borderBottom: '1px solid #d8d0c3', flexWrap: 'wrap' }}>
           <strong style={{ fontSize: 20, marginRight: 8 }}>管理员</strong>
           <button onClick={() => setAdminTab('users')} style={tabStyle(adminTab === 'users')}>用户管理</button>
@@ -587,12 +686,17 @@ export default function App() {
                         <div style={{ display: 'grid', gap: 8 }}>
                           {visibleStats.map((item) => (
                             <div key={item.course.id} style={{ border: '1px solid #e5dacb', borderRadius: 8, padding: 10, background: '#fffaf1' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                  <strong>课程 {item.course.number}</strong>
-                                  <button onClick={() => { setEditingCourse(item.course); setEditCourseText(item.course.chars.join('')); setEditCourseOpen(true) }} style={{ padding: '4px 8px', fontSize: 12 }}>编辑</button>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                  <strong style={{ whiteSpace: 'nowrap' }}>课程 {item.course.number}</strong>
+                                  {(item.course.libraryName || item.course.source === 'custom') && (
+                                    <span style={{ fontSize: 12, color: '#756d61', background: '#f0e9dc', borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap' }}>{item.course.libraryName || '自定义'}</span>
+                                  )}
+                                  {!item.isCompleted && (
+                                    <button onClick={() => { setEditingCourse(item.course); setEditCourseText(item.course.chars.join('')); setEditCourseOpen(true) }} style={editButtonStyle}>编辑</button>
+                                  )}
                                 </div>
-                                <span style={{ fontSize: 12, color: item.isCompleted ? '#287a55' : '#b53b35' }}>{item.isCompleted ? '已完成' : '进行中'}</span>
+                                <span style={{ fontSize: 12, color: item.isCompleted ? '#287a55' : '#b53b35', whiteSpace: 'nowrap' }}>{item.isCompleted ? '已完成' : '进行中'}</span>
                               </div>
                               <div style={{ marginTop: 4, color: '#6a5f50', fontSize: 13 }}>{item.course.chars.join('')}</div>
                               <div style={{ marginTop: 4, color: '#6a5f50', fontSize: 13 }}>
@@ -648,6 +752,7 @@ export default function App() {
               if (viewedUserId) {
                 setAdminCoursePage(0)
                 await loadAdminPage(0, viewedUserId)
+                await loadAdminSummary(viewedUserId)
               }
               setEditCourseOpen(false); setEditingCourse(null); setEditCourseText('')
             } else {
@@ -677,17 +782,22 @@ export default function App() {
               <>
                 <select value={adminSelectedGradeId} onChange={(e) => setAdminSelectedGradeId(e.target.value)}
                   style={{ width: '100%', height: 40, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', background: '#fff', color: '#241f18', fontSize: 14, marginBottom: 8 }}>
-                  {gradeTexts.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  {gradeTexts.map((g) => {
+                    const chars = getUniqueChineseChars(g.chars)
+                    const done = chars.filter((c) => viewedCompletedChars.has(c)).length
+                    return <option key={g.id} value={g.id}>{g.name}（共 {chars.length} 字，已完成 {done}）</option>
+                  })}
                 </select>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button onClick={async () => {
                     if (!viewedUser) return
                     const grade = gradeTexts.find((g) => g.id === adminSelectedGradeId) || gradeTexts[0]
-                    const courses = await generateDefaultCourses(viewedUser.id, grade?.chars)
+                    const courses = await generateDefaultCourses(viewedUser.id, grade?.chars, grade?.name)
                     if (courses[0]) {
                       const lastPage = Math.max(0, Math.ceil((totalAdminCourses + courses.length) / adminPageSize) - 1)
                       setAdminCoursePage(lastPage)
                       await loadAdminPage(lastPage, viewedUser.id)
+                      await loadAdminSummary(viewedUser.id)
                     }
                     setAdminAddCourseOpen(false); setAdminAddCourseText('')
                   }} style={{ ...buttonStyle, flex: 1, background: '#287a55', color: '#fff' }}>生成课程</button>
@@ -706,6 +816,7 @@ export default function App() {
                       const lastPage = Math.max(0, Math.ceil((totalAdminCourses + 1) / adminPageSize) - 1)
                       setAdminCoursePage(lastPage)
                       await loadAdminPage(lastPage, viewedUser.id)
+                      await loadAdminSummary(viewedUser.id)
                     }
                     setAdminAddCourseOpen(false); setAdminAddCourseText('')
                   }} style={{ ...buttonStyle, flex: 1, background: '#287a55', color: '#fff' }}>添加课程</button>
@@ -735,6 +846,7 @@ export default function App() {
 
   return (
     <div style={{ height: '100dvh', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#f4efe4', color: '#241f18', overflow: 'hidden' }}>
+      <RotatePrompt />
       <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: '#fff', borderBottom: '1px solid #d8d0c3', flexWrap: 'wrap' }}>
         <strong style={{ fontSize: 20 }}>{loggedInUser.name}</strong>
         <span style={{ color: '#756d61', fontSize: 14 }}>
@@ -758,16 +870,21 @@ export default function App() {
               <>
                 <select value={selectedStudentGradeId} onChange={(e) => setSelectedStudentGradeId(e.target.value)}
                   style={{ width: '100%', height: 40, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', background: '#fff', color: '#241f18', fontSize: 14, marginBottom: 8 }}>
-                  {gradeTexts.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  {gradeTexts.map((g) => {
+                    const chars = getUniqueChineseChars(g.chars)
+                    const done = chars.filter((c) => completedCharSet.has(c)).length
+                    return <option key={g.id} value={g.id}>{g.name}（共 {chars.length} 字，已完成 {done}）</option>
+                  })}
                 </select>
                 <button onClick={async () => {
                   const grade = gradeTexts.find((g) => g.id === selectedStudentGradeId) || gradeTexts[0]
-                  const courses = await generateDefaultCourses(loggedInUser.id, grade?.chars)
+                  const courses = await generateDefaultCourses(loggedInUser.id, grade?.chars, grade?.name)
                   if (courses[0]) {
                     setSelectedCourseId(courses[0].id); setIndex(0)
                     const lastPage = Math.max(0, Math.ceil((totalCourses + courses.length) / pageSize) - 1)
                     setCoursePage(lastPage)
                     await loadStudentPage(lastPage)
+                    await refreshCompletedChars(loggedInUser.id)
                   }
                 }} style={{ ...buttonStyle, width: '100%', background: '#2f6f8f', color: '#fff' }}>新增课程</button>
               </>
@@ -786,6 +903,7 @@ export default function App() {
                   const lastPage = Math.max(0, Math.ceil((totalCourses + 1) / pageSize) - 1)
                   setCoursePage(lastPage)
                   await loadStudentPage(lastPage)
+                  await refreshCompletedChars(loggedInUser.id)
                 }} style={{ ...buttonStyle, width: '100%', marginTop: 8, background: '#2f6f8f', color: '#fff' }}>新增课程</button>
               </>
             )}
@@ -824,6 +942,7 @@ export default function App() {
                   if (loggedInUser.id) {
                     const recs = await loadRecordsForCourses(loggedInUser.id, userCourses.map((c) => c.id))
                     setCourseRecords(recs)
+                    await refreshCompletedChars(loggedInUser.id)
                   }
                 }}
               />

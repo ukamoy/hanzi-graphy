@@ -86,7 +86,7 @@ router.put('/:userId/:practiceKey', requireAuth, (req, res) => {
       courseId,
       record.character,
       JSON.stringify(record.paths || []),
-      record.score || null,
+      record.score ?? null,
       record.quiz ? JSON.stringify(record.quiz) : null,
       Date.now()
     )

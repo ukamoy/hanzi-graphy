@@ -37,6 +37,7 @@ export type Course = {
   number: number
   chars: string[]
   source: CourseSource
+  libraryName?: string
   createdAt: number
   completedAt?: number
 }
@@ -142,8 +143,8 @@ export async function loadCoursesPaginated(userId: string, page: number, limit: 
   return { courses: result.courses as Course[], total: (result as { courses: any[]; total: number }).total }
 }
 
-export async function generateDefaultCourses(userId: string, text?: string) {
-  const result = await api.generateCourse(userId, text)
+export async function generateDefaultCourses(userId: string, text?: string, libraryName?: string) {
+  const result = await api.generateCourse(userId, text, libraryName)
   return result.courses as Course[]
 }
 
