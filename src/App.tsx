@@ -4,24 +4,23 @@ import CharacterBar from './components/CharacterBar'
 import PracticeBoard from './components/PracticeBoard'
 import {
   addCustomCourse,
-  addUser,
-  deleteUser,
   generateDefaultCourses,
   getPracticeKey,
-  isDefaultAdminPassword,
+  hasIncompleteCourse,
   loadAppState,
   loadCourses,
   loadCoursesPaginated,
   loadRecords,
   loadRecordsForCourses,
-  loginUserByName,
+  loginByEmail,
   logoutUser,
+  registerUser,
   saveGradeTexts,
   type AppState,
   type Course,
   type GradeText,
   type PracticeRecord,
-  updateUserPassword,
+  updateMyPassword,
   updateCourse,
 } from './engine/storage'
 
@@ -122,6 +121,20 @@ function getUniqueChineseChars(value: string) {
   return Array.from(new Set(Array.from(value).filter((ch) => ch >= '\u4e00' && ch <= '\u9fff')))
 }
 
+function getHighestGradeId(courses: Course[], gradeTexts: GradeText[]): string {
+  let bestIndex = -1
+  let bestId = ''
+  for (const course of courses) {
+    if (!course.libraryName) continue
+    const idx = gradeTexts.findIndex((g) => g.name === course.libraryName)
+    if (idx > bestIndex) {
+      bestIndex = idx
+      bestId = idx >= 0 ? gradeTexts[idx].id : ''
+    }
+  }
+  return bestId || (gradeTexts[0]?.id || '')
+}
+
 function findRecordForChar(records: Record<string, PracticeRecord>, courseId: string, character: string): PracticeRecord | null {
   const prefix = `${courseId}:`
   let fallback: PracticeRecord | null = null
@@ -212,17 +225,16 @@ function CourseButton({ stats, selected, onClick, onEdit }: { stats: CourseStats
 
 // Simple Modal portal to render modals into document.body and avoid DOM/focus interference
 function Modal({ children, onClose }: { children: React.ReactNode; onClose?: () => void }) {
-  const hostRef = useRef<HTMLDivElement | null>(null)
-  if (!hostRef.current && typeof document !== 'undefined') {
-    hostRef.current = document.createElement('div')
-  }
+  const [host] = useState<HTMLDivElement | null>(() =>
+    typeof document !== 'undefined' ? document.createElement('div') : null
+  )
 
   useEffect(() => {
-    const host = hostRef.current!
-    if (!host) return
-    document.body.appendChild(host)
-    return () => { if (host.parentNode) host.parentNode.removeChild(host) }
-  }, [])
+    const h = host
+    if (!h) return
+    document.body.appendChild(h)
+    return () => { if (h.parentNode) h.parentNode.removeChild(h) }
+  }, [host])
 
   // Prevent immediate backdrop click (from the same click that opened the modal) closing it.
   // allowCloseRef becomes true on the next macrotask.
@@ -243,7 +255,7 @@ function Modal({ children, onClose }: { children: React.ReactNode; onClose?: () 
     </div>
   )
 
-  return hostRef.current ? createPortal(node, hostRef.current) : null
+  return host ? createPortal(node, host) : null
 }
 
 
@@ -278,51 +290,6 @@ function PwdModal({ userId, draft, setDraft, confirm, setConfirm, onClose, onSub
   )
 }
 
-function AddUserModal({ open, name, setName, password, setPassword, onClose, onAdd }: { open: boolean; name: string; setName: (v: string) => void; password: string; setPassword: (v: string) => void; onClose: () => void; onAdd: () => Promise<void> }) {
-  const nameRef = useRef<HTMLInputElement | null>(null)
-  useEffect(() => { if (open) setTimeout(() => nameRef.current?.focus(), 0) }, [open])
-  if (!open) return null
-  const addOk = name.trim().length > 0 && password.trim().length > 0
-  return (
-    <Modal onClose={onClose}>
-      <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 300 }} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700 }}>新增学生</h3>
-        <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} placeholder="学生姓名" autoComplete="off"
-          style={{ width: '100%', height: 40, border: '1px solid #bfb5a5', borderRadius: 6, padding: '0 10px', fontSize: 15 }} />
-        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="初始密码" autoComplete="new-password"
-          onKeyDown={(e) => { if (e.key === 'Enter' && addOk) onAdd() }}
-          style={{ width: '100%', height: 40, border: '1px solid #bfb5a5', borderRadius: 6, padding: '0 10px', fontSize: 15, marginTop: 8 }} />
-        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-          <button onClick={onAdd}
-            disabled={!addOk}
-            style={{ ...buttonStyle, flex: 1, background: addOk ? '#287a55' : '#d7d0c6', color: '#fff' }}>添加</button>
-          <button onClick={onClose}
-            style={{ ...buttonStyle, flex: 1, background: '#d7d0c6', color: '#241f18' }}>取消</button>
-        </div>
-      </div>
-    </Modal>
-  )
-}
-
-function DeleteConfirm({ userId, name, onDelete, onClose }: { userId: string | null; name: string; onDelete: () => Promise<void>; onClose: () => void }) {
-  if (!userId) return null
-  const doDelete = async () => { await onDelete() }
-  return (
-    <Modal onClose={onClose}>
-      <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 300 }} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700 }}>确认删除</h3>
-        <p style={{ margin: '0 0 14px', color: '#5e5548', fontSize: 15 }}>确认删除用户 {name}，此操作不可恢复。</p>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={doDelete}
-            style={{ ...buttonStyle, flex: 1, background: '#b53b35', color: '#fff' }}>确认删除</button>
-          <button onClick={onClose}
-            style={{ ...buttonStyle, flex: 1, background: '#d7d0c6', color: '#241f18' }}>取消</button>
-        </div>
-      </div>
-    </Modal>
-  )
-}
-
 function EditCourseModal({ open, course, text, setText, onClose, onSave }: { open: boolean; course: Course | null; text: string; setText: (v: string) => void; onClose: () => void; onSave: () => Promise<void> }) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   useEffect(() => { if (open) setTimeout(() => textareaRef.current?.focus(), 0) }, [open])
@@ -345,9 +312,15 @@ function EditCourseModal({ open, course, text, setText, onClose, onSave }: { ope
 export default function App() {
   const [appState, setAppState] = useState<AppState | null>(null)
   const [loading, setLoading] = useState(true)
-  const [loginUserId, setLoginUserId] = useState('')
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [loginEmail, setLoginEmail] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
   const [loginError, setLoginError] = useState('')
+  const [regEmail, setRegEmail] = useState('')
+  const [regName, setRegName] = useState('')
+  const [regPassword, setRegPassword] = useState('')
+  const [regConfirm, setRegConfirm] = useState('')
+  const [regMessage, setRegMessage] = useState('')
   const [selectedCourseId, setSelectedCourseId] = useState('')
   const [index, setIndex] = useState(0)
   const [resetSignal, setResetSignal] = useState(0)
@@ -363,17 +336,8 @@ export default function App() {
   const [pwdModalUserId, setPwdModalUserId] = useState<string | null>(null)
   const [pwdDraft, setPwdDraft] = useState('')
   const [pwdConfirm, setPwdConfirm] = useState('')
-  const [forcePwd, setForcePwd] = useState('')
-  const [forcePwdConfirm, setForcePwdConfirm] = useState('')
-  const [addUserOpen, setAddUserOpen] = useState(false)
-  const [addUserName, setAddUserName] = useState('')
-  const [addUserPassword, setAddUserPassword] = useState('')
   const [selectedStudentGradeId, setSelectedStudentGradeId] = useState('')
   const [studentGenTab, setStudentGenTab] = useState<'auto' | 'custom'>('auto')
-  const [deleteConfirmUserId, setDeleteConfirmUserId] = useState<string | null>(null)
-  const [deleteConfirmName, setDeleteConfirmName] = useState('')
-  const [checkingDefault, setCheckingDefault] = useState(true)
-  const [isDefaultPwd, setIsDefaultPwd] = useState(false)
 
   // Admin add-course modal state
   const [adminAddCourseOpen, setAdminAddCourseOpen] = useState(false)
@@ -387,6 +351,7 @@ export default function App() {
   const [courseRecords, setCourseRecords] = useState<Record<string, PracticeRecord>>({})
   const [totalCourses, setTotalCourses] = useState(0)
   const [completedCharSet, setCompletedCharSet] = useState<Set<string>>(new Set())
+  const [studentHasUnfinished, setStudentHasUnfinished] = useState(false)
 
   // Admin viewed user data
   const [viewedUserCourses, setViewedUserCourses] = useState<Course[]>([])
@@ -394,6 +359,7 @@ export default function App() {
   const [viewedUserAllCourses, setViewedUserAllCourses] = useState<Course[]>([])
   const [viewedUserAllRecords, setViewedUserAllRecords] = useState<Record<string, PracticeRecord>>({})
   const [totalAdminCourses, setTotalAdminCourses] = useState(0)
+  const [adminTargetHasUnfinished, setAdminTargetHasUnfinished] = useState(false)
 
   // Edit course modal state
   const [editCourseOpen, setEditCourseOpen] = useState(false)
@@ -419,6 +385,7 @@ export default function App() {
     setGradeTexts(state.gradeTexts || [])
 
     if (state.loggedInUserId) {
+      const me = state.users.find((u) => u.id === state.loggedInUserId)
       const { courses, total } = await loadCoursesPaginated(state.loggedInUserId, 1, pageSize)
       setUserCourses(courses)
       setTotalCourses(total)
@@ -428,6 +395,20 @@ export default function App() {
         setCourseRecords(recs)
       } else {
         setCourseRecords({})
+      }
+      try {
+        setStudentHasUnfinished(await hasIncompleteCourse(state.loggedInUserId))
+      } catch {
+        // ignore
+      }
+      if (me?.role === 'student') {
+        // 记住学生已用的最高年级，避免默认到一年级上册
+        try {
+          const allCourses = await loadCourses(state.loggedInUserId)
+          setSelectedStudentGradeId(getHighestGradeId(allCourses, state.gradeTexts || []))
+        } catch {
+          // ignore
+        }
       }
       await refreshCompletedChars(state.loggedInUserId)
     }
@@ -444,7 +425,12 @@ export default function App() {
     } else {
       setCourseRecords({})
     }
-  }, [appState?.loggedInUserId])
+    try {
+      setStudentHasUnfinished(await hasIncompleteCourse(appState.loggedInUserId))
+    } catch {
+      // ignore
+    }
+  }, [appState])
 
   const loadAdminPage = useCallback(async (page: number, userId: string) => {
     const { courses, total } = await loadCoursesPaginated(userId, page + 1, adminPageSize)
@@ -468,14 +454,48 @@ export default function App() {
     } else {
       setViewedUserAllRecords({})
     }
+    try {
+      setAdminTargetHasUnfinished(await hasIncompleteCourse(userId))
+    } catch {
+      // ignore
+    }
   }, [])
 
   useEffect(() => {
-    refreshAppState().then(() => setLoading(false))
+    let cancelled = false
+    const run = async () => {
+      try {
+        await refreshAppState()
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    void run()
+    return () => { cancelled = true }
   }, [refreshAppState])
 
   const loggedInUser = appState?.users.find((u) => u.id === appState?.loggedInUserId) || null
   const studentUsers = useMemo(() => appState?.users.filter((u) => u.role === 'student') || [], [appState?.users])
+
+  const regOk = regEmail.trim().length > 0 && regPassword.trim().length > 0 && regPassword === regConfirm
+  const doRegister = async () => {
+    if (!regOk) return
+    try {
+      const { user, needsConfirmation } = await registerUser(regEmail, regPassword, regName)
+      if (needsConfirmation) {
+        setRegMessage('注册成功，请查收邮箱中的确认链接后再登录')
+        return
+      }
+      setRegEmail(''); setRegName(''); setRegPassword(''); setRegConfirm('')
+      setAuthMode('login')
+      if (user) {
+        resetPracticeSelection()
+        await refreshAppState()
+      }
+    } catch (e) {
+      setRegMessage(e instanceof Error ? e.message : '注册失败')
+    }
+  }
 
   const resetPracticeSelection = () => {
     setSelectedCourseId('')
@@ -489,30 +509,16 @@ export default function App() {
     await refreshAppState()
   }
 
-  const doAddUser = () => {
-    setAddUserOpen(true); setAddUserName(''); setAddUserPassword('')
-  }
-
-  useEffect(() => {
-    if (loggedInUser?.role === 'admin') {
-      isDefaultAdminPassword().then((r) => { setIsDefaultPwd(r); setCheckingDefault(false) })
-    } else {
-      setCheckingDefault(false)
-    }
-  }, [loggedInUser?.role, loggedInUser?.id])
-
   // Load data for admin viewed user (only when viewedUserId changes)
-  const prevViewedUserIdRef = useRef<string>('')
+  const adminTargetId = loggedInUser?.role === 'admin' ? (viewedUserId || studentUsers[0]?.id || '') : ''
+  const prevViewedUserIdRef = useRef('')
   useEffect(() => {
-    if (loggedInUser?.role !== 'admin') return
-    const targetId = viewedUserId || studentUsers[0]?.id || ''
-    if (!targetId) return
-    if (targetId === prevViewedUserIdRef.current) return
-    prevViewedUserIdRef.current = targetId
+    if (!adminTargetId || adminTargetId === prevViewedUserIdRef.current) return
+    prevViewedUserIdRef.current = adminTargetId
     setAdminCoursePage(0)
-    loadAdminPage(0, targetId)
-    loadAdminSummary(targetId)
-  })
+    loadAdminPage(0, adminTargetId)
+    loadAdminSummary(adminTargetId)
+  }, [adminTargetId, loadAdminPage, loadAdminSummary])
 
   if (loading) return <div style={{ height: '100dvh', display: 'grid', placeItems: 'center', background: '#f4efe4', color: '#756d61', fontSize: 18 }}>加载中...</div>
 
@@ -523,53 +529,51 @@ export default function App() {
     return (
       <div style={{ height: '100dvh', display: 'grid', placeItems: 'center', background: '#f4efe4', color: '#241f18', padding: 16 }}>
         <section style={{ width: 'min(420px, 100%)', background: '#fff', border: '1px solid #d8d0c3', borderRadius: 8, padding: 18 }}>
-          <h1 style={{ margin: '0 0 14px', fontSize: 24, lineHeight: 1.2, color: '#241f18', fontWeight: 800, letterSpacing: 0 }}>登录</h1>
-          <input value={loginUserId} onChange={(e) => { setLoginUserId(e.target.value); setLoginError('') }}
-            placeholder="用户名" type="text" autoFocus
-            onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('login-btn')?.click() }}
-            style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', background: '#fff', color: '#241f18', fontSize: 16 }} />
-          <input value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError('') }}
-            type="password" placeholder="密码"
-            onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('login-btn')?.click() }}
-            style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', fontSize: 16, marginTop: 10 }} />
-          {loginError && <div style={{ marginTop: 8, color: '#b53b35', fontSize: 14 }}>{loginError}</div>}
-          <button id="login-btn" onClick={async () => {
-            const ok = await loginUserByName(loginUserId, loginPassword)
-            if (!ok) { setLoginError('用户名或密码不正确'); return }
-            setLoginPassword(''); setLoginError(''); resetPracticeSelection(); await refreshAppState()
-          }} style={{ ...buttonStyle, width: '100%', marginTop: 12, background: '#287a55', color: '#fff' }}>登录</button>
-        </section>
-      </div>
-    )
-  }
-
-  if (loggedInUser.role === 'admin' && !checkingDefault && isDefaultPwd) {
-    const forcePwdOk = forcePwd.trim().length > 0 && forcePwd === forcePwdConfirm
-    const doForceChange = async () => {
-      if (!forcePwdOk) return
-      await updateUserPassword('admin', forcePwd)
-      setForcePwd(''); setForcePwdConfirm('')
-      setIsDefaultPwd(false)
-      await refreshAppState()
-    }
-    return (
-      <div style={{ height: '100dvh', display: 'grid', placeItems: 'center', background: '#f4efe4', color: '#241f18', padding: 16 }}>
-        <section style={{ width: 'min(420px, 100%)', background: '#fff', border: '1px solid #d8d0c3', borderRadius: 8, padding: 18 }}>
-          <h2 style={{ margin: '0 0 8px', fontSize: 22, fontWeight: 800, color: '#241f18' }}>请修改默认密码</h2>
-          <p style={{ margin: '0 0 14px', color: '#756d61', fontSize: 15, lineHeight: 1.4 }}>
-            首次登录或使用默认密码，需要先修改密码才能继续使用
-          </p>
-          <input value={forcePwd} onChange={(e) => setForcePwd(e.target.value)} type="password" placeholder="新密码" autoFocus autoComplete="new-password"
-            style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', fontSize: 16 }} />
-          <input value={forcePwdConfirm} onChange={(e) => setForcePwdConfirm(e.target.value)} type="password" placeholder="确认新密码" autoComplete="new-password"
-            onKeyDown={(e) => { if (e.key === 'Enter' && forcePwdOk) doForceChange() }}
-            style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', borderRadius: 6, padding: '0 10px', fontSize: 16, marginTop: 8 }} />
-          {forcePwd && forcePwdConfirm && forcePwd !== forcePwdConfirm && (
-            <div style={{ marginTop: 6, color: '#b53b35', fontSize: 14 }}>两次输入的密码不一致</div>
+          <h1 style={{ margin: '0 0 14px', fontSize: 24, lineHeight: 1.2, color: '#241f18', fontWeight: 800, letterSpacing: 0 }}>汉字书写练习</h1>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            <button onClick={() => { setAuthMode('login'); setLoginError(''); setRegMessage('') }}
+              style={tabStyle(authMode === 'login')}>登录</button>
+            <button onClick={() => { setAuthMode('register'); setLoginError(''); setRegMessage('') }}
+              style={tabStyle(authMode === 'register')}>注册</button>
+          </div>
+          {authMode === 'login' ? (
+            <>
+              <input value={loginEmail} onChange={(e) => { setLoginEmail(e.target.value); setLoginError('') }}
+                placeholder="邮箱" type="email" autoComplete="email" autoFocus
+                onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('login-btn')?.click() }}
+                style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', background: '#fff', color: '#241f18', fontSize: 16 }} />
+              <input value={loginPassword} onChange={(e) => { setLoginPassword(e.target.value); setLoginError('') }}
+                type="password" placeholder="密码" autoComplete="current-password"
+                onKeyDown={(e) => { if (e.key === 'Enter') document.getElementById('login-btn')?.click() }}
+                style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', fontSize: 16, marginTop: 10 }} />
+              {loginError && <div style={{ marginTop: 8, color: '#b53b35', fontSize: 14 }}>{loginError}</div>}
+              <button id="login-btn" onClick={async () => {
+                const user = await loginByEmail(loginEmail, loginPassword)
+                if (!user) { setLoginError('邮箱或密码不正确'); return }
+                setLoginPassword(''); setLoginError(''); resetPracticeSelection(); await refreshAppState()
+              }} style={{ ...buttonStyle, width: '100%', marginTop: 12, background: '#287a55', color: '#fff' }}>登录</button>
+            </>
+          ) : (
+            <>
+              <input value={regEmail} onChange={(e) => { setRegEmail(e.target.value); setRegMessage('') }}
+                placeholder="邮箱（登录账号）" type="email" autoComplete="email" autoFocus
+                style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', background: '#fff', color: '#241f18', fontSize: 16 }} />
+              <input value={regName} onChange={(e) => { setRegName(e.target.value); setRegMessage('') }}
+                placeholder="姓名（选填）" type="text" autoComplete="name"
+                style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', borderRadius: 8, padding: '0 10px', background: '#fff', color: '#241f18', fontSize: 16, marginTop: 10 }} />
+              <input value={regPassword} onChange={(e) => { setRegPassword(e.target.value); setRegMessage('') }}
+                type="password" placeholder="密码" autoComplete="new-password"
+                style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', fontSize: 16, marginTop: 10 }} />
+              <input value={regConfirm} onChange={(e) => { setRegConfirm(e.target.value); setRegMessage('') }}
+                type="password" placeholder="确认密码" autoComplete="new-password"
+                onKeyDown={(e) => { if (e.key === 'Enter' && regOk) doRegister() }}
+                style={{ width: '100%', height: 44, border: '1px solid #bfb5a5', fontSize: 16, marginTop: 10 }} />
+              {regMessage && <div style={{ marginTop: 8, color: regMessage.startsWith('注册成功') ? '#287a55' : '#b53b35', fontSize: 14 }}>{regMessage}</div>}
+              <button id="register-btn" onClick={doRegister}
+                disabled={!regOk}
+                style={{ ...buttonStyle, width: '100%', marginTop: 12, background: regOk ? '#2f6f8f' : '#d7d0c6', color: '#fff' }}>注册并登录</button>
+            </>
           )}
-          <button onClick={doForceChange}
-            disabled={!forcePwdOk}
-            style={{ ...buttonStyle, width: '100%', marginTop: 12, background: forcePwdOk ? '#287a55' : '#d7d0c6', color: '#fff' }}>确认修改</button>
         </section>
       </div>
     )
@@ -637,10 +641,8 @@ export default function App() {
           ) : (
             <div style={{ minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 16, height: '100%' }}>
               <aside style={{ minHeight: 0, overflowY: 'auto', background: '#fffaf1', border: '1px solid #d8d0c3', borderRadius: 8, padding: 12 }}>
-                <section style={{ marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <section style={{ marginBottom: 14 }}>
                   <h2 style={{ margin: 0, fontSize: 17, lineHeight: 1.2, color: '#241f18', fontWeight: 800 }}>用户列表</h2>
-                  <button onClick={doAddUser}
-                    style={{ ...buttonStyle, minHeight: 34, padding: '6px 12px', fontSize: 13, background: '#287a55', color: '#fff' }}>新增用户</button>
                 </section>
                 <section>
                   <div style={{ display: 'grid', gap: 8 }}>
@@ -652,12 +654,6 @@ export default function App() {
                             style={{ textAlign: 'left', display: 'block', width: '100%', padding: 0, background: 'transparent', color: '#241f18', borderRadius: 0 }}>
                             <strong>{u.name}</strong>
                           </button>
-                          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                            <button onClick={() => setPwdModalUserId(u.id)}
-                              style={{ ...buttonStyle, minHeight: 30, padding: '4px 8px', fontSize: 13, background: '#2f6f8f', color: '#fff', flex: 1 }}>改密码</button>
-                            <button onClick={() => { setDeleteConfirmUserId(u.id); setDeleteConfirmName(u.name) }}
-                              style={{ ...buttonStyle, minHeight: 30, padding: '4px 8px', fontSize: 13, background: '#b53b35', color: '#fff' }}>删除</button>
-                          </div>
                         </div>
                       )
                     })}
@@ -669,7 +665,13 @@ export default function App() {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <h2 style={{ margin: '0 0 10px', fontSize: 18, color: '#241f18', fontWeight: 800 }}>用户数据</h2>
                   <div>
-                    <button onClick={() => { setAdminAddCourseOpen(true); setAdminAddCourseMode('auto'); setAdminSelectedGradeId(selectedGradeId || gradeTexts[0]?.id || '') }}
+                    <button onClick={() => {
+                      if (adminTargetHasUnfinished) {
+                        alert('该学生还有未完成的课程，请先完成后再新增')
+                        return
+                      }
+                      setAdminAddCourseOpen(true); setAdminAddCourseMode('auto'); setAdminSelectedGradeId(selectedGradeId || gradeTexts[0]?.id || '')
+                    }}
                       style={{ ...buttonStyle, minHeight: 34, padding: '6px 12px', background: '#2f6f8f', color: '#fff' }}>新增课程</button>
                   </div>
                 </div>
@@ -725,18 +727,8 @@ export default function App() {
           onSubmit={async () => {
             if (!pwdModalUserId) return
             if (pwdDraft.trim().length === 0 || pwdDraft !== pwdConfirm) return
-            await updateUserPassword(pwdModalUserId, pwdDraft)
+            await updateMyPassword(pwdDraft)
             setPwdModalUserId(null); setPwdDraft(''); setPwdConfirm('')
-            await refreshAppState()
-          }} />
-
-        <AddUserModal open={addUserOpen} name={addUserName} setName={setAddUserName} password={addUserPassword} setPassword={setAddUserPassword}
-          onClose={() => { setAddUserOpen(false); setAddUserName(''); setAddUserPassword('') }}
-          onAdd={async () => {
-            const addOk = addUserName.trim().length > 0 && addUserPassword.trim().length > 0
-            if (!addOk) return
-            await addUser(addUserName.trim(), addUserPassword.trim())
-            setAddUserOpen(false); setAddUserName(''); setAddUserPassword('')
             await refreshAppState()
           }} />
 
@@ -760,16 +752,6 @@ export default function App() {
             }
           }} />
 
-        <DeleteConfirm userId={deleteConfirmUserId} name={deleteConfirmName}
-          onDelete={async () => {
-            const next = studentUsers.find((x) => x.id !== deleteConfirmUserId)
-            if (!deleteConfirmUserId) return
-            await deleteUser(deleteConfirmUserId)
-            setDeleteConfirmUserId(null); setDeleteConfirmName('')
-            setViewedUserId(next?.id || '')
-            await refreshAppState()
-          }} onClose={() => { setDeleteConfirmUserId(null); setDeleteConfirmName('') }} />
-
       {adminAddCourseOpen && (
         <Modal onClose={() => setAdminAddCourseOpen(false)}>
           <div style={{ background: '#fff', padding: 20, borderRadius: 8, width: 420 }} onClick={(e) => e.stopPropagation()}>
@@ -791,15 +773,21 @@ export default function App() {
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button onClick={async () => {
                     if (!viewedUser) return
-                    const grade = gradeTexts.find((g) => g.id === adminSelectedGradeId) || gradeTexts[0]
-                    const courses = await generateDefaultCourses(viewedUser.id, grade?.chars, grade?.name)
-                    if (courses[0]) {
-                      const lastPage = Math.max(0, Math.ceil((totalAdminCourses + courses.length) / adminPageSize) - 1)
-                      setAdminCoursePage(lastPage)
-                      await loadAdminPage(lastPage, viewedUser.id)
-                      await loadAdminSummary(viewedUser.id)
+                    if (adminTargetHasUnfinished) {
+                      alert('该学生还有未完成的课程，请先完成后再新增')
+                      return
                     }
-                    setAdminAddCourseOpen(false); setAdminAddCourseText('')
+                    try {
+                      const grade = gradeTexts.find((g) => g.id === adminSelectedGradeId) || gradeTexts[0]
+                      const courses = await generateDefaultCourses(viewedUser.id, grade?.chars, grade?.name)
+                      if (courses[0]) {
+                        await loadAdminPage(adminCoursePage, viewedUser.id)
+                        await loadAdminSummary(viewedUser.id)
+                      }
+                      setAdminAddCourseOpen(false); setAdminAddCourseText('')
+                    } catch (e) {
+                      alert(e instanceof Error ? e.message : String(e))
+                    }
                   }} style={{ ...buttonStyle, flex: 1, background: '#287a55', color: '#fff' }}>生成课程</button>
                   <button onClick={() => { setAdminAddCourseOpen(false); setAdminAddCourseText('') }} style={{ ...buttonStyle, flex: 1, background: '#d7d0c6', color: '#241f18' }}>取消</button>
                 </div>
@@ -811,14 +799,20 @@ export default function App() {
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button onClick={async () => {
                     if (!viewedUser) return
-                    const course = await addCustomCourse(viewedUser.id, adminAddCourseText)
-                    if (course) {
-                      const lastPage = Math.max(0, Math.ceil((totalAdminCourses + 1) / adminPageSize) - 1)
-                      setAdminCoursePage(lastPage)
-                      await loadAdminPage(lastPage, viewedUser.id)
-                      await loadAdminSummary(viewedUser.id)
+                    if (adminTargetHasUnfinished) {
+                      alert('该学生还有未完成的课程，请先完成后再新增')
+                      return
                     }
-                    setAdminAddCourseOpen(false); setAdminAddCourseText('')
+                    try {
+                      const course = await addCustomCourse(viewedUser.id, adminAddCourseText)
+                      if (course) {
+                        await loadAdminPage(adminCoursePage, viewedUser.id)
+                        await loadAdminSummary(viewedUser.id)
+                      }
+                      setAdminAddCourseOpen(false); setAdminAddCourseText('')
+                    } catch (e) {
+                      alert(e instanceof Error ? e.message : String(e))
+                    }
                   }} style={{ ...buttonStyle, flex: 1, background: '#287a55', color: '#fff' }}>添加课程</button>
                   <button onClick={() => { setAdminAddCourseOpen(false); setAdminAddCourseText('') }} style={{ ...buttonStyle, flex: 1, background: '#d7d0c6', color: '#241f18' }}>取消</button>
                 </div>
@@ -843,6 +837,27 @@ export default function App() {
   const safeIndex = activeCourse ? Math.min(index, Math.max(0, activeCourse.chars.length - 1)) : 0
   const active = activeCourse?.chars[safeIndex] || ''
   const activePracticeKey = activeCourse && active ? getPracticeKey(activeCourse.id, safeIndex, active) : ''
+
+  // 当前课程中尚未完成的字（按课程顺序），用于"下一个/完成"按钮
+  const remainingIndices = activeCourse && activeStats
+    ? activeCourse.chars.map((_, i) => i).filter((i) => !activeStats.records[i]?.quiz?.completed)
+    : []
+  const isLastRemaining = remainingIndices.length === 1 && remainingIndices[0] === safeIndex
+  const allCompleted = remainingIndices.length === 0
+  const nextButtonLabel = allCompleted || isLastRemaining ? '完成' : '下一个'
+
+  const handleNextOrComplete = async () => {
+    if (!activeCourse || !activeStats) return
+    // 全部完成或正在写最后一个字：点击后刷新课程统计
+    if (allCompleted || isLastRemaining) {
+      await loadStudentPage(coursePage)
+      await refreshCompletedChars(loggedInUser.id)
+      return
+    }
+    // 否则定位到第一个未完成的字
+    const target = remainingIndices[0]
+    if (target >= 0 && target !== safeIndex) setIndex(target)
+  }
 
   return (
     <div style={{ height: '100dvh', display: 'grid', gridTemplateRows: 'auto 1fr', background: '#f4efe4', color: '#241f18', overflow: 'hidden' }}>
@@ -877,14 +892,20 @@ export default function App() {
                   })}
                 </select>
                 <button onClick={async () => {
-                  const grade = gradeTexts.find((g) => g.id === selectedStudentGradeId) || gradeTexts[0]
-                  const courses = await generateDefaultCourses(loggedInUser.id, grade?.chars, grade?.name)
-                  if (courses[0]) {
-                    setSelectedCourseId(courses[0].id); setIndex(0)
-                    const lastPage = Math.max(0, Math.ceil((totalCourses + courses.length) / pageSize) - 1)
-                    setCoursePage(lastPage)
-                    await loadStudentPage(lastPage)
-                    await refreshCompletedChars(loggedInUser.id)
+                  if (studentHasUnfinished) {
+                    alert('请先完成当前课程，再新增新课程')
+                    return
+                  }
+                  try {
+                    const grade = gradeTexts.find((g) => g.id === selectedStudentGradeId) || gradeTexts[0]
+                    const courses = await generateDefaultCourses(loggedInUser.id, grade?.chars, grade?.name)
+                    if (courses[0]) {
+                      setSelectedCourseId(courses[0].id); setIndex(0)
+                      await loadStudentPage(coursePage)
+                      await refreshCompletedChars(loggedInUser.id)
+                    }
+                  } catch (e) {
+                    alert(e instanceof Error ? e.message : String(e))
                   }
                 }} style={{ ...buttonStyle, width: '100%', background: '#2f6f8f', color: '#fff' }}>新增课程</button>
               </>
@@ -897,13 +918,19 @@ export default function App() {
                   <div style={{ position: 'absolute', right: 8, bottom: 6, fontSize: 12, color: '#756d61', pointerEvents: 'none' }}>{customCourseText.length} 字</div>
                 </div>
                 <button onClick={async () => {
-                  const course = await addCustomCourse(loggedInUser.id, customCourseText)
-                  if (!course) return
-                  setSelectedCourseId(course.id); setCustomCourseText(''); setIndex(0)
-                  const lastPage = Math.max(0, Math.ceil((totalCourses + 1) / pageSize) - 1)
-                  setCoursePage(lastPage)
-                  await loadStudentPage(lastPage)
-                  await refreshCompletedChars(loggedInUser.id)
+                  if (studentHasUnfinished) {
+                    alert('请先完成当前课程，再新增新课程')
+                    return
+                  }
+                  try {
+                    const course = await addCustomCourse(loggedInUser.id, customCourseText)
+                    if (!course) return
+                    setSelectedCourseId(course.id); setCustomCourseText(''); setIndex(0)
+                    await loadStudentPage(coursePage)
+                    await refreshCompletedChars(loggedInUser.id)
+                  } catch (e) {
+                    alert(e instanceof Error ? e.message : String(e))
+                  }
                 }} style={{ ...buttonStyle, width: '100%', marginTop: 8, background: '#2f6f8f', color: '#fff' }}>新增课程</button>
               </>
             )}
@@ -936,6 +963,8 @@ export default function App() {
                 character={active} userId={loggedInUser.id} courseId={activeCourse.id}
                 practiceKey={activePracticeKey} resetKey={resetSignal}
                 initialRecord={courseRecords[activePracticeKey]}
+                nextLabel={nextButtonLabel}
+                onNext={handleNextOrComplete}
                 onReset={() => setResetSignal((k) => k + 1)}
                 onSaved={async () => {
                   // Reload records for current page courses
@@ -965,18 +994,8 @@ export default function App() {
         onSubmit={async () => {
           if (!pwdModalUserId) return
           if (pwdDraft.trim().length === 0 || pwdDraft !== pwdConfirm) return
-          await updateUserPassword(pwdModalUserId, pwdDraft)
+          await updateMyPassword(pwdDraft)
           setPwdModalUserId(null); setPwdDraft(''); setPwdConfirm('')
-          await refreshAppState()
-        }} />
-
-      <AddUserModal open={addUserOpen} name={addUserName} setName={setAddUserName} password={addUserPassword} setPassword={setAddUserPassword}
-        onClose={() => { setAddUserOpen(false); setAddUserName(''); setAddUserPassword('') }}
-        onAdd={async () => {
-          const addOk = addUserName.trim().length > 0 && addUserPassword.trim().length > 0
-          if (!addOk) return
-          await addUser(addUserName.trim(), addUserPassword.trim())
-          setAddUserOpen(false); setAddUserName(''); setAddUserPassword('')
           await refreshAppState()
         }} />
 
@@ -998,16 +1017,6 @@ export default function App() {
             alert('更新课程失败')
           }
         }} />
-
-      <DeleteConfirm userId={deleteConfirmUserId} name={deleteConfirmName}
-        onDelete={async () => {
-          const next = studentUsers.find((x) => x.id !== deleteConfirmUserId)
-          if (!deleteConfirmUserId) return
-          await deleteUser(deleteConfirmUserId)
-          setDeleteConfirmUserId(null); setDeleteConfirmName('')
-          setViewedUserId(next?.id || '')
-          await refreshAppState()
-        }} onClose={() => { setDeleteConfirmUserId(null); setDeleteConfirmName('') }} />
 
     </div>
   )

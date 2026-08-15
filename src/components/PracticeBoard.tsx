@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import HanziWriter from 'hanzi-writer'
 import type { Point, StrokeData } from 'hanzi-writer'
 import GridLayer from './GridLayer'
-import { getPinyinText, getWordHints, type WordHint } from '../engine/pinyin'
+import { getPinyinReadings, getWordHints, type WordHint } from '../engine/pinyin'
 import {
   savePracticeRecord,
   type PracticeRecord,
@@ -20,6 +20,8 @@ interface Props {
   initialRecord?: PracticeRecord | null
   onReset?: () => void
   onSaved?: () => void
+  nextLabel?: string
+  onNext?: () => void
 }
 
 type QuizStats = QuizRecord
@@ -141,12 +143,14 @@ export default function PracticeBoard({
   resetKey,
   initialRecord = null,
   onReset,
-  onSaved
+  onSaved,
+  nextLabel,
+  onNext
 }: Props) {
-  const prevKeyRef = useRef(practiceKey)
   const [loadedRecord, setLoadedRecord] = useState<PracticeRecord | null>(initialRecord)
-  if (practiceKey !== prevKeyRef.current) {
-    prevKeyRef.current = practiceKey
+  const [prevPracticeKey, setPrevPracticeKey] = useState(practiceKey)
+  if (practiceKey !== prevPracticeKey) {
+    setPrevPracticeKey(practiceKey)
     setLoadedRecord(initialRecord)
   }
   const record = loadedRecord
@@ -157,20 +161,23 @@ export default function PracticeBoard({
   const boardWrapRef = useRef<HTMLDivElement>(null)
   const [boardScale, setBoardScale] = useState(1)
 
+  const pinyinReadings = useMemo(() => getPinyinReadings(character), [character])
+  const pinyinSpace = PINYIN_SPACE * Math.max(1, pinyinReadings.length)
+
   useEffect(() => {
     const el = boardWrapRef.current
     if (!el) return
     const update = () => {
       const rect = el.getBoundingClientRect()
       if (rect.width <= 0) return
-      // boardWrap 内还包含字格上方一行的拼音，按剩余空间缩放 300x300 字格
-      setBoardScale(Math.min(1, rect.width / 300, (rect.height - PINYIN_SPACE) / 300))
+      // boardWrap 内还包含字格上方多行拼音，按剩余空间缩放 300x300 字格
+      setBoardScale(Math.min(1, rect.width / 300, (rect.height - pinyinSpace) / 300))
     }
     update()
     const ro = new ResizeObserver(update)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [pinyinSpace])
 
   const writerRef = useRef<HanziWriter | null>(null)
   const replayIntroRef = useRef<(startStroke?: number, showCompleted?: boolean) => void>(() => {})
@@ -186,9 +193,10 @@ export default function PracticeBoard({
   const statsRef = useRef<QuizStats>(initialStats)
   const [isIntroPlaying, setIsIntroPlaying] = useState(false)
   const onSavedRef = useRef(onSaved)
-  onSavedRef.current = onSaved
+  useEffect(() => {
+    onSavedRef.current = onSaved
+  }, [onSaved])
 
-  const pinyinText = useMemo(() => getPinyinText(character), [character])
   const [wordHints, setWordHints] = useState<WordHint[]>([])
   const hasStartedWriting = paths.length > 0 || score !== null || stats.totalMistakes > 0
   const commitPracticeState = useCallback((
@@ -432,7 +440,9 @@ export default function PracticeBoard({
             paddingBottom: 2,
             pointerEvents: 'none'
           }}>
-            {pinyinText}
+            {pinyinReadings.map((p, index) => (
+              <div key={index}>{p}</div>
+            ))}
           </div>
         )}
 
@@ -599,6 +609,22 @@ export default function PracticeBoard({
                   }}
                 >
                   重写
+                </button>
+              )}
+              {!readOnly && nextLabel && onNext && (
+                <button
+                  onClick={onNext}
+                  style={{
+                    background: nextLabel === '完成' ? '#6d4c2f' : '#287a55',
+                    color: '#fff',
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    fontSize: 14,
+                    fontWeight: 700,
+                    lineHeight: 1
+                  }}
+                >
+                  {nextLabel}
                 </button>
               )}
             </div>

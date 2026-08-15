@@ -58,77 +58,53 @@ export function getPracticeKey(courseId: string, index: number, character: strin
   return `${courseId}:${index}:${character}`
 }
 
-import defaultGradeTexts from './defaultGradeTexts'
-
 export async function loadAppState(): Promise<AppState> {
   const [me, gradeResult] = await Promise.all([
     api.getMe(),
     api.getGradeTexts()
   ])
 
-  // If backend has no grade texts, or has fewer than the built-in defaults, seed defaults on startup
-  let gradeTexts = gradeResult.gradeTexts || []
-  const needSeed = !gradeTexts || gradeTexts.length === 0 || (defaultGradeTexts && Array.isArray(defaultGradeTexts) && gradeTexts.length < defaultGradeTexts.length)
-  if (needSeed) {
-    try {
-      await api.saveGradeTexts(defaultGradeTexts)
-      gradeTexts = defaultGradeTexts
-    } catch (e) {
-      // ignore seed errors and fall back to empty
-      gradeTexts = []
-    }
-  }
-
+  const gradeTexts = gradeResult.gradeTexts || []
   const loggedInUserId = me.user?.id || null
 
   let users: UserProfile[] = []
-  if (loggedInUserId) {
+  if (me.user) users = [me.user]
+  if (me.user?.role === 'admin') {
     const userResult = await api.getUsers()
-    users = userResult.users as UserProfile[]
+    const all = userResult.users as UserProfile[]
+    users = [...all.filter((u) => u.id !== me.user!.id), me.user]
   }
 
   return { gradeTexts, users, loggedInUserId }
 }
 
-export { api }
-
 /* ---- Auth ---- */
 
-export async function loginUserByName(name: string, password: string) {
+export async function loginByEmail(email: string, password: string) {
   try {
-    await api.login(name, password)
-    return true
+    const result = await api.login(email, password)
+    return result.user
   } catch {
-    return false
+    return null
   }
+}
+
+export async function registerUser(email: string, password: string, name?: string) {
+  return api.register(email, password, name)
 }
 
 export async function logoutUser() {
   await api.logout()
 }
 
-export async function isDefaultAdminPassword() {
-  const result = await api.isDefaultAdminPassword()
-  return result.isDefault
-}
-
-/* ---- Users ---- */
-
-export async function addUser(name: string, password: string) {
-  const result = await api.addUser(name, password)
-  return result.user as UserProfile
-}
-
-export async function deleteUser(userId: string) {
-  if (userId === 'admin') return false
-  await api.deleteUser(userId)
-  return true
-}
-
-export async function updateUserPassword(userId: string, password: string) {
+export async function updateMyPassword(password: string) {
   if (password.trim().length === 0) return false
-  await api.updatePassword(userId, password)
-  return true
+  try {
+    await api.updateMyPassword(password)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /* ---- Courses ---- */
@@ -140,7 +116,16 @@ export async function loadCourses(userId: string): Promise<Course[]> {
 
 export async function loadCoursesPaginated(userId: string, page: number, limit: number): Promise<{ courses: Course[]; total: number }> {
   const result = await api.getCourses(userId, page, limit)
-  return { courses: result.courses as Course[], total: (result as { courses: any[]; total: number }).total }
+  return { courses: result.courses as Course[], total: (result as { courses: Course[]; total: number }).total }
+}
+
+export async function hasIncompleteCourse(userId: string): Promise<boolean> {
+  try {
+    const result = await api.hasIncompleteCourse(userId)
+    return result.hasIncomplete
+  } catch {
+    return false
+  }
 }
 
 export async function generateDefaultCourses(userId: string, text?: string, libraryName?: string) {
@@ -179,21 +164,11 @@ export async function loadRecordsForCourses(userId: string, courseIds: string[])
   return result.records as Record<string, PracticeRecord>
 }
 
-export async function loadPracticeRecord(userId: string, practiceKey: string): Promise<PracticeRecord | null> {
-  const result = await api.getRecord(userId, practiceKey)
-  return result.record as PracticeRecord | null
-}
-
 export async function savePracticeRecord(userId: string, practiceKey: string, record: PracticeRecord) {
   await api.saveRecord(userId, practiceKey, record)
 }
 
 /* ---- Grade Texts ---- */
-
-export async function getGradeTexts() {
-  const result = await api.getGradeTexts()
-  return result.gradeTexts as GradeText[]
-}
 
 export async function saveGradeTexts(grades: GradeText[]) {
   await api.saveGradeTexts(grades)

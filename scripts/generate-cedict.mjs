@@ -1,7 +1,7 @@
 // 从 CC-CEDICT 数据生成前端使用的精简词典
 // 产物：
-//   src/data/cedict-pinyin.ts    —— 单字拼音表（打包进 bundle，替换 pinyin-pro）
-//   public/data/cedict-words.json —— 每字组词 + 英文释义（按需懒加载）
+//   src/data/cedict-pinyin.ts    —— 单字拼音表（每字全部读音，主音在前；打包进 bundle，替换 pinyin-pro）
+//   public/data/cedict-words.json —— 每字组词 + 英文释义（覆盖每个读音，按需懒加载）
 import { createRequire } from 'node:module'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -12,8 +12,9 @@ const entries = require('cedict')
 
 const PINYIN_CAP = 3
 const WORD_MAX_LEN = 3
+const WORDS_PER_READING = 2
+const TOTAL_WORDS_CAP = 6
 
-const pinyinMap = new Map()
 const wordIndex = new Map()
 const readingCounts = new Map()
 const readingsForChar = new Map()
@@ -49,6 +50,11 @@ function isCJKWord(w) {
   return [...w].every(isCJKChar)
 }
 
+// 完整音节键（含声调数字），如 "bu3"、"hao4"，用于区分声调不同的多音字（好 hǎo/hào）
+function syllKeyOf(syllable) {
+  return syllable.toLowerCase().replace(/^(.+?)([0-5]?)$/, '$1$2')
+}
+
 for (const e of entries) {
   const w = e.simplified || e.traditional
   if (!w) continue
@@ -60,10 +66,18 @@ for (const e of entries) {
     const defs = e.definitions
       .map((d) => ({ pinyin: d.pinyin.split(' ')[0], secondary: isSecondary(d.translations[0]) }))
       .filter((d) => d.pinyin)
-    let best = pinyinMap.get(ch)
-    if (!best) {
-      best = defs.find((d) => !d.secondary) || defs[0]
-      pinyinMap.set(ch, best)
+    // 收集单字条目的所有读音；非姓氏/异体等派生义优先
+    for (const d of defs) {
+      const key = syllKeyOf(d.pinyin)
+      let readings = readingsForChar.get(ch)
+      if (!readings) {
+        readings = new Map()
+        readingsForChar.set(ch, readings)
+      }
+      const existing = readings.get(key)
+      if (!existing || (!d.secondary && existing.secondary)) {
+        readings.set(key, { syl: d.pinyin.toLowerCase(), secondary: d.secondary })
+      }
     }
   } else if (len >= 2 && len <= WORD_MAX_LEN) {
     if (!isCJKWord(w)) continue
@@ -73,20 +87,21 @@ for (const e of entries) {
     t = t.split('[')[0].split('CL:')[0].split(',')[0].trim()
     if (t.length > 40) t = t.slice(0, 40) + '…'
     const vulgar = isVulgar(e.definitions[0].translations[0])
-    // 统计该词里每个汉字读音的使用频次，用于给多音字选最常用读音
+    // 统计该词里每个汉字读音的使用频次，用于给多音字的主音排序
     for (let i = 0; i < chars.length; i++) {
       const syllable = syllables[i]
       if (syllable) {
         const ch = chars[i]
-        const base = syllable.toLowerCase().replace(/[0-5]$/, '')
-        const key = ch + '|' + base
-        readingCounts.set(key, (readingCounts.get(key) || 0) + 1)
+        const key = syllKeyOf(syllable)
+        const countKey = ch + '|' + key
+        readingCounts.set(countKey, (readingCounts.get(countKey) || 0) + 1)
         let readings = readingsForChar.get(ch)
         if (!readings) {
           readings = new Map()
           readingsForChar.set(ch, readings)
         }
-        if (!readings.has(base)) readings.set(base, syllable)
+        // 组词中的实际读音可靠，直接采信
+        if (!readings.has(key)) readings.set(key, { syl: syllable.toLowerCase(), secondary: false })
       }
     }
     for (const ch of chars) {
@@ -95,48 +110,74 @@ for (const e of entries) {
   }
 }
 
-// 多音字：选择在组词中出现次数最多的读音；无组词数据时退回第一个非姓氏读音
-for (const [ch, best] of pinyinMap) {
-  const readingCountsForChar = new Map()
+// 每字读音列表：优先非姓氏/异体音，按组词出现次数排序，主音在前
+const pinyinList = new Map()
+for (const [ch, readings] of readingsForChar) {
+  const counts = new Map()
   for (const [key, count] of readingCounts) {
     if (key.startsWith(ch + '|')) {
-      const reading = key.slice(ch.length + 1)
-      readingCountsForChar.set(reading, (readingCountsForChar.get(reading) || 0) + count)
+      const syll = key.slice(ch.length + 1)
+      counts.set(syll, (counts.get(syll) || 0) + count)
     }
   }
-  if (readingCountsForChar.size > 0) {
-    let top = null
-    let topCount = -1
-    for (const [reading, count] of readingCountsForChar) {
-      if (count > topCount) {
-        top = reading
-        topCount = count
-      }
-    }
-    const readings = readingsForChar.get(ch)
-    pinyinMap.set(ch, { pinyin: (readings && readings.get(top)) || top, secondary: false })
-  } else if (best.secondary) {
-    pinyinMap.set(ch, { pinyin: best.pinyin, secondary: false })
-  }
+  const entries = [...readings.entries()]
+  const hasNonSecondary = entries.some(([, r]) => !r.secondary)
+  const filtered = hasNonSecondary ? entries.filter(([, r]) => !r.secondary) : entries
+  const ordered = filtered
+    .sort((a, b) => (counts.get(b[0]) || 0) - (counts.get(a[0]) || 0))
+  pinyinList.set(ch, ordered.map(([, r]) => r.syl))
 }
 
 const wordsOut = {}
-for (const [ch, { pinyin }] of pinyinMap) {
-  const arr = (wordIndex.get(ch) || [])
-    .filter((x) => !x.vulgar)
-    .sort((a, b) => {
-      const ha = a.hsk > 0 ? a.hsk : 99
-      const hb = b.hsk > 0 ? b.hsk : 99
-      if (ha !== hb) return ha - hb
-      const leadA = a.w.startsWith(ch) ? 0 : 1
-      const leadB = b.w.startsWith(ch) ? 0 : 1
-      if (leadA !== leadB) return leadA - leadB
-      return a.w.length - b.w.length
-    })
-    .slice(0, PINYIN_CAP)
+for (const [ch, pinyins] of pinyinList) {
+  const arr = (wordIndex.get(ch) || []).filter((x) => !x.vulgar)
+  const multi = pinyins.length > 1
+
+  // 把组词按"该字在词中的读音"分组，确保每个读音都有示例词
+  const byReading = new Map()
+  for (const item of arr) {
+    const syllables = item.p.split(' ')
+    const idx = [...item.w].indexOf(ch)
+    const syl = idx >= 0 ? syllables[idx] : undefined
+    if (!syl) continue
+    const key = syllKeyOf(syl)
+    let list = byReading.get(key)
+    if (!list) {
+      list = []
+      byReading.set(key, list)
+    }
+    list.push(item)
+  }
+
+  const sortWords = (items) => [...items].sort((a, b) => {
+    const ha = a.hsk > 0 ? a.hsk : 99
+    const hb = b.hsk > 0 ? b.hsk : 99
+    if (ha !== hb) return ha - hb
+    // 词长短的更基础常用；字头只作最后决胜（避免次要读音被"以字开头"的生僻词抢走，如 萝卜 vs 卜卜米）
+    if (a.w.length !== b.w.length) return a.w.length - b.w.length
+    const leadA = a.w.startsWith(ch) ? 0 : 1
+    const leadB = b.w.startsWith(ch) ? 0 : 1
+    if (leadA !== leadB) return leadA - leadB
+    return 0
+  })
+
+  const selected = []
+  for (const syl of pinyins) {
+    const cap = multi ? WORDS_PER_READING : PINYIN_CAP
+    selected.push(...sortWords(byReading.get(syllKeyOf(syl)) || []).slice(0, cap))
+  }
+
+  const seen = new Set()
+  const unique = selected.filter((item) => {
+    const k = `${item.w}|${item.p}|${item.t}`
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+
   wordsOut[ch] = {
-    pinyin,
-    words: arr.map((x) => [x.w, x.p, x.t])
+    pinyin: pinyins,
+    words: unique.slice(0, TOTAL_WORDS_CAP).map((x) => [x.w, x.p, x.t])
   }
 }
 
@@ -146,7 +187,7 @@ mkdirSync(dataDir, { recursive: true })
 mkdirSync(join(root, 'public', 'data'), { recursive: true })
 
 const lines = Object.entries(wordsOut).map(([ch, { pinyin }]) => `${JSON.stringify(ch)}: ${JSON.stringify(pinyin)}`)
-writeFileSync(join(dataDir, 'cedict-pinyin.ts'), `export const cedictPinyin: Record<string, string> = {\n${lines.join(',\n')}\n}\n`)
+writeFileSync(join(dataDir, 'cedict-pinyin.ts'), `export const cedictPinyin: Record<string, string[]> = {\n${lines.join(',\n')}\n}\n`)
 
 const wordsJson = {}
 for (const [ch, { words }] of Object.entries(wordsOut)) {

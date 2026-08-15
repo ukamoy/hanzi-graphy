@@ -14,7 +14,7 @@ function markSyllable(syllable: string) {
   const m = syllable.match(/^(.+?)([0-5]?)$/)
   const base = m ? m[1] : syllable
   const toneRaw = m ? m[2] : ''
-  if (!toneRaw || toneRaw === '0' || toneRaw === '5') return base
+  if (!toneRaw || toneRaw === '0' || toneRaw === '5') return base.toLowerCase()
   const tone = parseInt(toneRaw, 10)
   const normalized = base.toLowerCase().replace('u:', 'ü').replaceAll('v', 'ü')
   const chars = [...normalized]
@@ -33,17 +33,15 @@ function markSyllable(syllable: string) {
   return chars.join('')
 }
 
-export function convertCedictPinyin(pinyin: string) {
+function convertCedictPinyin(pinyin: string) {
   return pinyin.split(' ').map(markSyllable).join(' ')
 }
 
-// 与 pinyin-pro 的 toneType:'symbol' 输出一致的逐字拼音
-export function getPinyinText(value: string) {
-  return Array.from(value)
-    .map((ch) => cedictPinyin[ch])
-    .filter((p): p is string => !!p)
-    .map(convertCedictPinyin)
-    .join(' ')
+// 某字全部读音（按常用度排序，主音在前），已转声调符号，如 卜 -> ['bǔ', 'bo']
+export function getPinyinReadings(character: string): string[] {
+  const readings = cedictPinyin[character]
+  if (!readings || readings.length === 0) return []
+  return readings.map(convertCedictPinyin)
 }
 
 export interface WordHint {

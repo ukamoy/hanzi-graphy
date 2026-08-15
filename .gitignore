@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Environment
+.env
+.env.*
+!.env.example
+
 # Generated from CC-CEDICT (scripts/generate-cedict.mjs)
 src/data/cedict-pinyin.ts
 public/data/cedict-words.json

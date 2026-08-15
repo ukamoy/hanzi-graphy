@@ -1,9 +1,12 @@
 node_modules
 dist
 .git
+.gitignore
 *.md
-server/node_modules
-server/data.db
-server/data.db-shm
-server/data.db-wal
+.env
+.env.*
 run.sh
+Dockerfile
+.dockerignore
+data.db*
+server
